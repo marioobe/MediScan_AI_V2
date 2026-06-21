@@ -1,0 +1,88 @@
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Models\AiModel;
+use App\Models\Prediction;
+use App\Services\AiService;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Storage;
+
+class PredictionController extends Controller
+{
+    protected AiService $aiService;
+
+    public function __construct(AiService $aiService)
+    {
+        $this->aiService = $aiService;
+    }
+
+    public function index()
+    {
+        $activeModel = $this->aiService->getActiveModel();
+        return view('public.predict', [
+            'hasActiveModel' => $activeModel['active'] ?? false,
+            'modelInfo' => $activeModel['model'] ?? null,
+        ]);
+    }
+
+    public function predict(Request $request)
+    {
+        $request->validate([
+            'image' => 'required|image|mimes:jpeg,png,jpg|max:10240',
+            'patient_name' => 'required|string|max:255',
+            'patient_age' => 'required|integer|min:1|max:150',
+        ]);
+
+        $activeModel = $this->aiService->getActiveModel();
+        if (!($activeModel['active'] ?? false)) {
+            $msg = 'Belum ada model aktif. Silakan hubungi admin.';
+            if ($request->ajax()) return response()->json(['error' => $msg], 400);
+            return back()->with('error', $msg);
+        }
+
+        $image = $request->file('image');
+        $result = $this->aiService->predict($image->path(), $image->getClientOriginalName());
+
+        if (isset($result['error'])) {
+            if ($request->ajax()) return response()->json(['error' => $result['error']], 502);
+            return back()->with('error', $result['error']);
+        }
+
+        try {
+            $imagePath = $image->store('predictions', 'public');
+
+            $modelLabel = $result['model_id'] ?? ($activeModel['model']['model_id'] ?? 'unknown');
+            $localModel = AiModel::where('model_id', $modelLabel)->first();
+
+            $prediction = Prediction::create([
+                'prediction_id' => $result['prediction_id'] ?? null,
+                'ai_model_id' => $localModel?->id,
+                'patient_name' => $request->input('patient_name'),
+                'patient_age' => (int) $request->input('patient_age'),
+                'image_path' => $imagePath,
+                'original_name' => $image->getClientOriginalName(),
+                'predicted_class' => $result['predicted_class'],
+                'confidence' => $result['confidence'],
+                'probabilities' => $result['probabilities'] ?? [],
+                'model_label' => $modelLabel,
+            ]);
+
+            $result['db_id'] = $prediction->id;
+        } catch (\Exception $e) {
+            if ($request->ajax()) {
+                return response()->json(['error' => 'Gagal menyimpan: ' . $e->getMessage()], 500);
+            }
+            return back()->with('error', 'Gagal menyimpan hasil prediksi: ' . $e->getMessage());
+        }
+
+        if ($request->ajax()) {
+            return response()->json($result);
+        }
+
+        return back()
+            ->with('result', $result)
+            ->with('patient_name', $request->input('patient_name'))
+            ->with('patient_age', $request->input('patient_age'));
+    }
+}

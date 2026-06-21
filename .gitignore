@@ -1,0 +1,40 @@
+# Python
+ai-service/.venv/
+ai-service/__pycache__/
+*.pyc
+__pycache__/
+*.log
+
+# Laravel
+laravel/vendor/
+laravel/node_modules/
+laravel/.env
+laravel/storage/framework/cache/
+laravel/storage/framework/sessions/
+laravel/storage/framework/views/
+laravel/bootstrap/cache/*.php
+
+# Storage - dataset hasil ekstraksi (ribuan file PNG)
+storage/datasets/
+
+# Storage - dataset ZIP
+*.zip
+storage/test_dataset_v2.zip
+storage/test_dataset.zip
+
+# Storage - hasil prediksi (generated)
+storage/predictions/
+
+# Root temporary files
+test_model.keras
+test_cookies.txt
+fastapi_err.log
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+Thumbs.db
+.DS_Store

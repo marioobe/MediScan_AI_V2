@@ -1,0 +1,23 @@
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::table('ai_models', function (Blueprint $table) {
+            $table->string('model_id')->unique()->nullable()->after('id');
+            $table->text('notes')->nullable()->after('version');
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::table('ai_models', function (Blueprint $table) {
+            $table->dropColumn(['model_id', 'notes']);
+        });
+    }
+};
