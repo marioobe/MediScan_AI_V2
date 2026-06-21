@@ -87,9 +87,150 @@ MobileNetV2 adalah arsitektur CNN yang ringan dan efisien, dikembangkan oleh Goo
 
 ### 3.2 Codingan
 
-Berikut adalah potongan kode penting dari file `ai-service/app/trainer.py`.
+#### `ai-service/app/config.py` ([lihat file lengkap](ai-service/app/config.py))
 
-**Data Augmentation Menggunakan Layer Keras**
+Seluruh file konfigurasi (18 baris):
+
+```python
+import os
+
+STORAGE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "storage"))
+MODELS_DIR = os.path.join(STORAGE_DIR, "models")
+DATASETS_DIR = os.path.join(STORAGE_DIR, "datasets")
+PREDICTIONS_DIR = os.path.join(STORAGE_DIR, "predictions")
+RUNS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "runs"))
+
+MAX_DATASET_SIZE_MB = 500
+VALID_EXTENSIONS = {".jpg", ".jpeg", ".png"}
+MASK_KEYWORDS = ["mask", "label", "annotation", "gt"]
+MIN_IMAGES_PER_CLASS = 20
+WARNING_IMAGES_PER_CLASS = 50
+IMG_SIZE = (224, 224)
+RANDOM_SEED = 42
+
+for d in [MODELS_DIR, DATASETS_DIR, PREDICTIONS_DIR, RUNS_DIR]:
+    os.makedirs(d, exist_ok=True)
+```
+
+#### `ai-service/app/main.py` ([lihat file lengkap](ai-service/app/main.py))
+
+**Model Management:**
+
+```python
+def _load_active_model():
+    active = _get_active_model()
+    if not active:
+        return None, None, None
+    model = tf.keras.models.load_model(active["model_path"])
+    with open(active["class_names_path"], "r") as f:
+        class_names = json.load(f)
+    return model, class_names, active["model_id"]
+
+def _set_active_model(model_id, model_path, class_names):
+    active_file = os.path.join(MODELS_DIR, "active_model.json")
+    with open(active_file, "w") as f:
+        json.dump({
+            "model_id": model_id,
+            "model_path": model_path,
+            "class_names": class_names,
+            "activated_at": datetime.now().isoformat()
+        }, f, indent=2)
+```
+
+**Endpoint Training (5 parameter dinamis):**
+
+```python
+@app.post("/train")
+async def create_training(
+    file: UploadFile = File(...),
+    epochs: int = Form(10),
+    validation_split: float = Form(0.3),
+    batch_size: int = Form(32),
+    image_size: int = Form(224),
+    learning_rate: float = Form(0.0001),
+):
+    if not file.filename.lower().endswith(".zip"):
+        raise HTTPException(400, "Only ZIP files are accepted")
+    zip_filename = f"{uuid.uuid4()}_{file.filename}"
+    zip_path = os.path.join(DATASETS_DIR, zip_filename)
+    content = await file.read()
+    with open(zip_path, "wb") as f:
+        f.write(content)
+    job_id = start_training(
+        zip_path=zip_path, epochs=epochs,
+        validation_split=validation_split, batch_size=batch_size,
+        image_size=image_size, learning_rate=learning_rate,
+    )
+    return {"job_id": job_id, "status": "pending"}
+```
+
+**Endpoint Prediksi:**
+
+```python
+@app.post("/predict")
+async def predict(file: UploadFile = File(...)):
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in VALID_EXTENSIONS:
+        raise HTTPException(400, f"Invalid file type: {ext}")
+    model, class_names, model_id = _load_active_model()
+    if model is None:
+        raise HTTPException(400, "No active model available")
+    image_bytes = await file.read()
+    image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    image = image.resize(IMG_SIZE)
+    img_array = img_to_array(image)
+    img_array = np.expand_dims(img_array, axis=0)
+    img_array = preprocess_input(img_array)
+    predictions = model.predict(img_array, verbose=0)[0]
+    predicted_idx = int(np.argmax(predictions))
+    confidence = float(predictions[predicted_idx])
+    predicted_class = class_names[predicted_idx]
+    probabilities = {class_names[i]: float(predictions[i]) for i in range(len(class_names))}
+    pred_data = _save_prediction(model_id, image_filename, predicted_class, confidence, probabilities)
+    return {
+        "predicted_class": predicted_class,
+        "confidence": confidence,
+        "probabilities": probabilities,
+    }
+```
+
+**Register Model dengan Confusion Matrix Upload:**
+
+```python
+@app.post("/models/register")
+async def register_model(
+    file: UploadFile = File(...),
+    name: str = Form(""),
+    class_names_json: str = Form("[]"),
+    accuracy: float = Form(0.0),
+    loss: float = Form(0.0),
+    cm_file: UploadFile = File(None),
+):
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in (".keras", ".h5", ".hdf5"):
+        raise HTTPException(400, "Only .keras, .h5, .hdf5 files are accepted")
+    content = await file.read()
+    model_id = str(uuid.uuid4())[:8]
+    dest = os.path.join(MODELS_DIR, f"model_{model_id}.keras")
+    with open(dest, "wb") as f:
+        f.write(content)
+    model = tf.keras.models.load_model(dest)
+    model.summary()
+    class_names = json.loads(class_names_json) if class_names_json else []
+    class_names_path = os.path.join(MODELS_DIR, f"class_names_{model_id}.json")
+    with open(class_names_path, "w") as f:
+        json.dump(class_names, f)
+    if cm_file and cm_file.filename:
+        cm_content = await cm_file.read()
+        cm_dest = os.path.join(MODELS_DIR, f"confusion_matrix_{model_id}.png")
+        with open(cm_dest, "wb") as f:
+            f.write(cm_content)
+    return {"status": "registered", "model_id": model_id}
+```
+
+#### `ai-service/app/trainer.py` ([lihat file lengkap](ai-service/app/trainer.py))
+
+**Data Augmentation Menggunakan Layer Keras:**
 
 Augmentasi ditempatkan sebagai lapisan pertama model agar berjalan di GPU selama forward pass:
 
@@ -102,21 +243,49 @@ base_model = MobileNetV2(weights="imagenet", include_top=False,
                          pooling="avg", input_tensor=augmented)
 ```
 
-**Class Weights untuk Dataset Tidak Seimbang**
-
-Bobot dihitung berdasarkan frekuensi sampel per kelas:
+**Class Weights untuk Dataset Tidak Seimbang:**
 
 ```python
 def _compute_class_weight(class_counts):
-    total = sum(len(v) for v in class_counts.values())
-    n_classes = len(class_counts)
-    class_weight = {}
-    for i, cls in enumerate(sorted(class_counts.keys())):
-        class_weight[i] = total / (n_classes * len(class_counts[cls]))
-    return class_weight
+    class_names = sorted(class_counts.keys())
+    counts = np.array([len(class_counts[c]) for c in class_names])
+    total = counts.sum()
+    n = len(class_names)
+    weights = total / (n * counts)
+    return {i: float(w) for i, w in enumerate(weights)}
 ```
 
-**Fase Fine-Tuning dengan Learning Rate 1e-5**
+**ProgressCallback - Pelacak Epoch Real-Time:**
+
+```python
+class ProgressCallback(tf.keras.callbacks.Callback):
+    def __init__(self, job_id, phase_label="", initial_epochs=0):
+        super().__init__()
+        self.job_id = job_id
+        self.phase_label = phase_label
+        self.initial_epochs = initial_epochs
+
+    def on_epoch_end(self, epoch, logs=None):
+        job = jobs.get(self.job_id)
+        if job and job.get("cancel_requested"):
+            self.model.stop_training = True
+            return
+        logs = logs or {}
+        display_epoch = epoch + 1 + self.initial_epochs
+        _update_job(self.job_id, current_epoch=display_epoch)
+        ep = {"epoch": display_epoch, "phase": self.phase_label,
+              "accuracy": float(logs.get("accuracy", 0)),
+              "loss": float(logs.get("loss", 0)),
+              "val_accuracy": float(logs.get("val_accuracy", 0)),
+              "val_loss": float(logs.get("val_loss", 0))}
+        if self.job_id in jobs:
+            jobs[self.job_id].setdefault("epochs", []).append(ep)
+        _log(self.job_id, f"Epoch {ep['epoch']}: acc={ep['accuracy']:.4f} | "
+             f"val_acc={ep['val_accuracy']:.4f} | "
+             f"loss={ep['loss']:.4f} | val_loss={ep['val_loss']:.4f}")
+```
+
+**Fase Fine-Tuning dengan Learning Rate 1e-5:**
 
 Layer 0 sampai 120 dibekukan, sisanya dilatih ulang:
 
@@ -127,6 +296,67 @@ for layer in base_model.layers[:120]:
 model.compile(optimizer=Adam(learning_rate=1e-5),
               loss="categorical_crossentropy",
               metrics=["accuracy"])
+```
+
+**Training Dua Fase dengan Dynamic Epoch:**
+
+```python
+total_epochs = epochs
+half_epochs = max(1, total_epochs // 2)
+
+# Fase 1: Frozen Layers
+history_1 = model.fit(
+    train_gen, epochs=half_epochs, validation_data=val_gen,
+    class_weight=class_weight,
+    callbacks=[early_stop, reduce_lr, prog_cb_1], verbose=0
+)
+epoch_1 = len(history_1.history["loss"])
+
+# Fase 2: Fine-Tuning dari epoch_1 hingga total_epochs
+history_2 = model.fit(
+    train_gen, initial_epoch=epoch_1, epochs=total_epochs,
+    validation_data=val_gen, class_weight=class_weight,
+    callbacks=[early_stop, reduce_lr, prog_cb_2], verbose=0
+)
+```
+
+**Webhook Notifikasi ke Laravel:**
+
+```python
+try:
+    laravel_url = os.environ.get(
+        "LARAVEL_WEBHOOK_URL",
+        "http://localhost:8080/api/training/webhook"
+    )
+    resp = requests.post(laravel_url, json={
+        "job_id": job_id,
+        "status": "Completed",
+        "accuracy": float(val_acc),
+        "loss": float(val_loss),
+    }, timeout=5)
+    _log(job_id, f"Notifikasi ke Laravel: HTTP {resp.status_code}")
+except Exception as webhook_err:
+    _log(job_id, f"Gagal mengirim notifikasi ke Laravel: {webhook_err}")
+```
+
+**Confusion Matrix & Classification Report:**
+
+```python
+def _generate_confusion_matrix(model, val_gen, class_names, save_path):
+    val_gen.reset()
+    y_true = val_gen.classes
+    y_pred = model.predict(val_gen, verbose=0)
+    y_pred_classes = np.argmax(y_pred, axis=1)
+    cm = confusion_matrix(y_true, y_pred_classes)
+    plt.figure(figsize=(10, 8))
+    sns.heatmap(cm, annot=True, fmt="d", cmap="Blues",
+                xticklabels=class_names, yticklabels=class_names)
+    plt.title("Confusion Matrix")
+    plt.ylabel("True Label")
+    plt.xlabel("Predicted Label")
+    plt.tight_layout()
+    plt.savefig(save_path)
+    plt.close()
 ```
 
 ### 3.3 Penjelasan
