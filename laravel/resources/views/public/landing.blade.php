@@ -204,7 +204,7 @@
         <div class="flex flex-wrap justify-center gap-8">
             <div class="text-center w-full sm:w-[45%] md:w-[28%] lg:flex-1 max-w-[180px]" data-tilt data-tilt-glare data-tilt-max="5">
                 <div class="w-36 h-44 rounded-xl bg-slate-800 mx-auto mb-4 overflow-hidden flex items-center justify-center transition-all duration-300 ease-out hover:scale-105 hover:-translate-y-2 hover:shadow-xl hover:shadow-indigo-500/30">
-                    <img src="{{ asset('images/team/yeni.jpg') }}" alt="Yeni Xavira Hati Naikofi"
+                    <img src="{{ asset('images/team/yenny.jpeg') }}" alt="Yeni Xavira Hati Naikofi"
                         class="w-full h-full object-cover object-top"
                         onerror="this.style.display='none';this.parentElement.innerHTML='<span class=\'text-2xl font-bold text-indigo-400\'>Y</span>'">
                 </div>
@@ -213,7 +213,7 @@
             </div>
             <div class="text-center w-full sm:w-[45%] md:w-[28%] lg:flex-1 max-w-[180px]" data-tilt data-tilt-glare data-tilt-max="5">
                 <div class="w-36 h-44 rounded-xl bg-slate-800 mx-auto mb-4 overflow-hidden flex items-center justify-center transition-all duration-300 ease-out hover:scale-105 hover:-translate-y-2 hover:shadow-xl hover:shadow-indigo-500/30">
-                    <img src="{{ asset('images/team/benitrianus.jpg') }}" alt="Benitrianus Nahak"
+                    <img src="{{ asset('images/team/ben.jpeg') }}" alt="Benitrianus Nahak"
                         class="w-full h-full object-cover object-top"
                         onerror="this.style.display='none';this.parentElement.innerHTML='<span class=\'text-2xl font-bold text-indigo-400\'>B</span>'">
                 </div>
@@ -231,7 +231,7 @@
             </div>
             <div class="text-center w-full sm:w-[45%] md:w-[28%] lg:flex-1 max-w-[180px]" data-tilt data-tilt-glare data-tilt-max="5">
                 <div class="w-36 h-44 rounded-xl bg-slate-800 mx-auto mb-4 overflow-hidden flex items-center justify-center transition-all duration-300 ease-out hover:scale-105 hover:-translate-y-2 hover:shadow-xl hover:shadow-indigo-500/30">
-                    <img src="{{ asset('images/team/florista.jpg') }}" alt="Florista Denisa Seran"
+                    <img src="{{ asset('images/team/denisa.jpeg') }}" alt="Florista Denisa Seran"
                         class="w-full h-full object-cover object-top"
                         onerror="this.style.display='none';this.parentElement.innerHTML='<span class=\'text-2xl font-bold text-indigo-400\'>F</span>'">
                 </div>
@@ -240,7 +240,7 @@
             </div>
             <div class="text-center w-full sm:w-[45%] md:w-[28%] lg:flex-1 max-w-[180px]" data-tilt data-tilt-glare data-tilt-max="5">
                 <div class="w-36 h-44 rounded-xl bg-slate-800 mx-auto mb-4 overflow-hidden flex items-center justify-center transition-all duration-300 ease-out hover:scale-105 hover:-translate-y-2 hover:shadow-xl hover:shadow-indigo-500/30">
-                    <img src="{{ asset('images/team/basilio.jpg') }}" alt="Basilio Agung De Fretis"
+                    <img src="{{ asset('images/team/agung.jpeg') }}" alt="Basilio Agung De Fretis"
                         class="w-full h-full object-cover object-top"
                         onerror="this.style.display='none';this.parentElement.innerHTML='<span class=\'text-2xl font-bold text-indigo-400\'>B</span>'">
                 </div>

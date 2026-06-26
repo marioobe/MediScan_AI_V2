@@ -14,12 +14,18 @@ $hasErrors = $false
 $startedProcs = @()
 
 foreach ($svc in $C_Ports) {
-    $portFree = $true
-    $existing = netstat -ano 2>$null | Select-String ":$($svc.Port)\s"
+    $existing = netstat -ano 2>$null | Select-String ":$($svc.Port)\s.*LISTENING"
     if ($existing) {
-        Write-Host "  [WARN] Port $($svc.Port) is already in use! " -ForegroundColor Yellow -NoNewline
-        Write-Host "$($svc.Name) might not start correctly." -ForegroundColor Yellow
-        $portFree = $false
+        $existingPids = ($existing | ForEach-Object { ($_ -split '\s+')[-1] }) | Where-Object { $_ -match '^\d+$' } | Sort-Object -Unique
+        foreach ($pid in $existingPids) {
+            try {
+                Stop-Process -Id $pid -Force -ErrorAction Stop
+                Write-Host "  [KILL] Stopped old process PID $pid on port $($svc.Port)" -ForegroundColor DarkYellow
+            } catch {
+                Write-Host "  [WARN] Could not stop PID $pid on port $($svc.Port): $_" -ForegroundColor Yellow
+            }
+        }
+        Start-Sleep -Milliseconds 500
     }
 
     $fullPath = Join-Path $RootDir $svc.Dir
@@ -58,7 +64,7 @@ foreach ($svc in $C_Ports) {
         continue
     }
 
-    $isUsed = netstat -ano 2>$null | Select-String ":$($svc.Port)\s"
+    $isUsed = netstat -ano 2>$null | Select-String ":$($svc.Port)\s.*LISTENING"
     $status = "STARTED"
     $color = "Green"
     if (-not $isUsed) {

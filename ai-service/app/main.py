@@ -5,18 +5,21 @@ import uuid
 from datetime import datetime
 
 import numpy as np
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 import cv2
 from PIL import Image
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse, FileResponse, Response
 
 import tensorflow as tf
-from tensorflow.keras.applications.mobilenet_v2 import MobileNetV2, preprocess_input, decode_predictions
+from tensorflow.keras.applications.mobilenet_v2 import preprocess_input
 from tensorflow.keras.preprocessing.image import img_to_array, load_img
 
 from app.config import MODELS_DIR, PREDICTIONS_DIR, IMG_SIZE, DATASETS_DIR, VALID_EXTENSIONS
-from app.trainer import start_training, get_job, cancel_training
+from app.trainer import start_training, get_job, cancel_training, SparseFocalLoss
 
 app = FastAPI(title="Medical Image Classifier AI Service", version="1.0.0")
 
@@ -27,13 +30,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-try:
-    gatekeeper_model = MobileNetV2(weights='imagenet')
-    print("[GATEKEEPER] MobileNetV2 ImageNet loaded successfully")
-except Exception as e:
-    print(f"[GATEKEEPER] Failed to load MobileNetV2: {e}")
-    gatekeeper_model = None
 
 def _get_active_model():
     active_file = os.path.join(MODELS_DIR, "active_model.json")
@@ -56,7 +52,7 @@ def _load_active_model():
     active = _get_active_model()
     if not active:
         return None, None, None
-    model = tf.keras.models.load_model(active["model_path"])
+    model = tf.keras.models.load_model(active["model_path"], custom_objects={'SparseFocalLoss': SparseFocalLoss})
     with open(active["class_names_path"], "r") as f:
         class_names = json.load(f)
     return model, class_names, active["model_id"]
@@ -113,59 +109,6 @@ def _generate_gradcam(model, img_array, predicted_idx, original_pil):
     cv2.imwrite(path, overlay)
     return filename
 
-def _is_grayscale_ultrasound(image_pil):
-    img_np = np.array(image_pil)
-
-    if len(img_np.shape) == 3:
-        channels_std = np.mean(np.std(img_np, axis=-1))
-        print(f"[DEBUG] Nilai standar deviasi warna: {channels_std}")
-        if channels_std > 12.0:
-            return False
-
-    gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY) if len(img_np.shape) == 3 else img_np
-    edges = cv2.Canny(gray, 30, 100)
-    edge_density = np.sum(edges > 0) / edges.size
-    print(f"[DEBUG] Kerapatan tepi gambar (Edge Density): {edge_density}")
-
-    if edge_density < 0.01:
-        print("[VALIDASI GAGAL] Gambar terlalu mulus/blur, tidak memiliki karakteristik tekstur USG.")
-        return False
-
-    return True
-
-def _has_real_world_objects(image_pil):
-    if gatekeeper_model is None:
-        return False
-
-    img = image_pil.convert('RGB').resize((224, 224))
-    img_array = img_to_array(img)
-    img_array = np.expand_dims(img_array, axis=0)
-    img_array = preprocess_input(img_array)
-
-    preds = gatekeeper_model.predict(img_array, verbose=0)
-    decoded = decode_predictions(preds, top=10)[0]
-
-    forbidden_keywords = [
-        'person', 'man', 'woman', 'boy', 'girl', 'human', 'guy',
-        'shirt', 't-shirt', 'jean', 'dress', 'apparel', 'coat', 'jersey',
-        'suit', 'jacket', 'jeans', 'pants', 'sweater', 'scuba', 'diver',
-        'beach', 'seashore', 'lakeshore', 'ocean', 'mountain', 'valley', 'cliff',
-        'sandbar', 'promontory',
-        'spotlight', 'matchstick', 'candle', 'torch', 'flashlight',
-        'room', 'home', 'building', 'vehicle', 'car', 'dog', 'cat', 'animal',
-    ]
-
-    print("[DEBUG GATEKEEPER] 5 Prediksi Teratas:")
-    for i, (_, label, score) in enumerate(decoded[:5]):
-        print(f"  {i+1}. {label}: {score*100:.2f}%")
-
-    for _, label, score in decoded:
-        label_lower = label.lower()
-        if score > 0.02 and any(kw in label_lower for kw in forbidden_keywords):
-            print(f"[GATEKEEPER] Menolak gambar. Terdeteksi: {label} ({score*100:.2f}%)")
-            return True
-    return False
-
 def _load_all_predictions():
     predictions = []
     for f in sorted(os.listdir(PREDICTIONS_DIR), reverse=True):
@@ -216,6 +159,9 @@ async def training_status(job_id: str):
         "progress_percent": job.get("progress_percent"),
         "accuracy": job.get("accuracy_result"),
         "loss": job.get("loss_result"),
+        "precision": job.get("precision_result"),
+        "recall": job.get("recall_result"),
+        "f1_score": job.get("f1_score_result"),
         "error_message": job.get("error_message"),
         "model_id": job.get("model_id"),
         "epochs": job.get("epochs", []),
@@ -287,6 +233,53 @@ async def get_confusion_matrix_data(model_id: str):
         data = json.load(f)
     return JSONResponse(data)
 
+@app.get("/files/classification_report_data/{model_id}")
+async def get_classification_report_data(model_id: str):
+    path = os.path.join(MODELS_DIR, f"classification_report_{model_id}.json")
+    if not os.path.exists(path):
+        raise HTTPException(404, "Classification report not found")
+    with open(path, "r") as f:
+        data = json.load(f)
+    return JSONResponse(data)
+
+@app.get("/files/training_history/{model_id}")
+async def get_training_history(model_id: str):
+    history_path = os.path.join(MODELS_DIR, f"history_{model_id}.json")
+    if not os.path.exists(history_path):
+        raise HTTPException(404, "Training history not found")
+    with open(history_path, "r") as f:
+        history = json.load(f)
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+    acc_data = history.get("accuracy", [])
+    val_acc_data = history.get("val_accuracy", [])
+    loss_data = history.get("loss", [])
+    val_loss_data = history.get("val_loss", [])
+    n_epochs = len(acc_data)
+    if n_epochs > 0:
+        epochs = range(1, n_epochs + 1)
+        ax1.plot(epochs, acc_data, "b-o", label="Train Accuracy", markersize=3)
+        if len(val_acc_data) == n_epochs:
+            ax1.plot(epochs, val_acc_data, "r-o", label="Val Accuracy", markersize=3)
+        ax1.set_title("Accuracy per Epoch")
+        ax1.set_xlabel("Epoch")
+        ax1.set_ylabel("Accuracy")
+        ax1.legend()
+        ax1.grid(True, alpha=0.3)
+        ax2.plot(epochs, loss_data, "b-o", label="Train Loss", markersize=3)
+        if len(val_loss_data) == n_epochs:
+            ax2.plot(epochs, val_loss_data, "r-o", label="Val Loss", markersize=3)
+        ax2.set_title("Loss per Epoch")
+        ax2.set_xlabel("Epoch")
+        ax2.set_ylabel("Loss")
+        ax2.legend()
+        ax2.grid(True, alpha=0.3)
+    plt.tight_layout()
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=120, bbox_inches="tight")
+    plt.close(fig)
+    buf.seek(0)
+    return Response(content=buf.getvalue(), media_type="image/png")
+
 @app.get("/files/gradcam/{filename}")
 async def get_gradcam(filename: str):
     path = os.path.join(PREDICTIONS_DIR, filename)
@@ -304,10 +297,6 @@ async def predict(file: UploadFile = File(...)):
         raise HTTPException(400, "No active model available. Please ask admin to activate a model first.")
     image_bytes = await file.read()
     original_pil = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-    if not _is_grayscale_ultrasound(original_pil):
-        raise HTTPException(status_code=400, detail="Sistem mendeteksi bahwa gambar yang Anda unggah bukan merupakan citra medis ultrasonografi (USG) yang valid.")
-    if _has_real_world_objects(original_pil):
-        raise HTTPException(status_code=400, detail="Sistem menolak gambar. Terdeteksi adanya objek non-medis (manusia/pakaian/pemandangan) yang bukan merupakan citra USG payudara.")
     image = original_pil.resize(IMG_SIZE)
     img_array = img_to_array(image)
     img_array = np.expand_dims(img_array, axis=0)
@@ -376,6 +365,7 @@ async def list_models():
                 cm_path = os.path.join(MODELS_DIR, f"confusion_matrix_{model_id}.png")
                 cr_path = os.path.join(MODELS_DIR, f"classification_report_{model_id}.json")
                 history_path = os.path.join(MODELS_DIR, f"history_{model_id}.json")
+                metrics_path = os.path.join(MODELS_DIR, f"metrics_{model_id}.json")
                 cn_path = os.path.join(MODELS_DIR, f"class_names_{model_id}.json")
                 class_names = []
                 if os.path.exists(cn_path):
@@ -385,6 +375,10 @@ async def list_models():
                 if os.path.exists(history_path):
                     with open(history_path, "r") as fh:
                         history = json.load(fh)
+                metrics = {}
+                if os.path.exists(metrics_path):
+                    with open(metrics_path, "r") as fh:
+                        metrics = json.load(fh)
                 val_acc = history.get("val_accuracy", [None])[-1]
                 val_loss = history.get("val_loss", [None])[-1]
                 active = _get_active_model()
@@ -394,9 +388,13 @@ async def list_models():
                     "class_names": class_names,
                     "accuracy": val_acc,
                     "loss": val_loss,
+                    "precision": metrics.get("precision"),
+                    "recall": metrics.get("recall"),
+                    "f1_score": metrics.get("f1_score"),
                     "is_active": is_active,
                     "has_confusion_matrix": os.path.exists(cm_path),
                     "has_classification_report": os.path.exists(cr_path),
+                    "has_history": os.path.exists(history_path),
                 })
     return sorted(models, key=lambda x: x["is_active"], reverse=True)
 
@@ -420,6 +418,7 @@ async def delete_model(model_id: str):
         f"confusion_matrix_{model_id}.json",
         f"classification_report_{model_id}.json",
         f"history_{model_id}.json",
+        f"metrics_{model_id}.json",
         f"class_names_{model_id}.json",
     ]
     for pattern in patterns:

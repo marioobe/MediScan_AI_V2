@@ -37,32 +37,44 @@
                     <p class="text-xs text-slate-500 mt-2">Overall Progress</p>
                 </div>
 
-                <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 flex-1">
-                    <div class="p-4 bg-slate-700/30 rounded-xl">
-                        <p class="text-xs text-slate-400 uppercase tracking-wide">Status</p>
-                        <p class="text-lg font-semibold mt-1 {{ $job->status === 'completed' ? 'text-green-400' : 'text-red-400' }}">
-                            {{ ucfirst($job->status) }}
-                        </p>
+                    <div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-4 flex-1">
+                        <div class="p-4 bg-slate-700/30 rounded-xl">
+                            <p class="text-xs text-slate-400 uppercase tracking-wide">Status</p>
+                            <p class="text-lg font-semibold mt-1 {{ $job->status === 'completed' ? 'text-green-400' : 'text-red-400' }}">
+                                {{ ucfirst($job->status) }}
+                            </p>
+                        </div>
+                        @php
+                            $lastEpoch = $job->current_epoch;
+                            if (!$lastEpoch && $job->epoch_history) {
+                                $lastEpoch = count($job->epoch_history);
+                            }
+                        @endphp
+                        <div class="p-4 bg-slate-700/30 rounded-xl">
+                            <p class="text-xs text-slate-400 uppercase tracking-wide">Epoch</p>
+                            <p class="text-lg font-semibold mt-1 text-white">{{ $lastEpoch ? $lastEpoch.' / '.($job->total_epoch ?? $lastEpoch) : '-' }}</p>
+                        </div>
+                        <div class="p-4 bg-slate-700/30 rounded-xl">
+                            <p class="text-xs text-slate-400 uppercase tracking-wide">Accuracy</p>
+                            <p class="text-lg font-semibold mt-1 text-white">{{ $job->accuracy_result ? number_format($job->accuracy_result * 100, 1).'%' : '-' }}</p>
+                        </div>
+                        <div class="p-4 bg-slate-700/30 rounded-xl">
+                            <p class="text-xs text-slate-400 uppercase tracking-wide">Precision</p>
+                            <p class="text-lg font-semibold mt-1 text-white">{{ $job->precision_result ? number_format($job->precision_result * 100, 1).'%' : '-' }}</p>
+                        </div>
+                        <div class="p-4 bg-slate-700/30 rounded-xl">
+                            <p class="text-xs text-slate-400 uppercase tracking-wide">Recall</p>
+                            <p class="text-lg font-semibold mt-1 text-white">{{ $job->recall_result ? number_format($job->recall_result * 100, 1).'%' : '-' }}</p>
+                        </div>
+                        <div class="p-4 bg-slate-700/30 rounded-xl">
+                            <p class="text-xs text-slate-400 uppercase tracking-wide">F1-Score</p>
+                            <p class="text-lg font-semibold mt-1 text-white">{{ $job->f1_score_result ? number_format($job->f1_score_result * 100, 1).'%' : '-' }}</p>
+                        </div>
+                        <div class="p-4 bg-slate-700/30 rounded-xl">
+                            <p class="text-xs text-slate-400 uppercase tracking-wide">Loss</p>
+                            <p class="text-lg font-semibold mt-1 text-white">{{ $job->loss_result ? number_format($job->loss_result, 4) : '-' }}</p>
+                        </div>
                     </div>
-                    @php
-                        $lastEpoch = $job->current_epoch;
-                        if (!$lastEpoch && $job->epoch_history) {
-                            $lastEpoch = count($job->epoch_history);
-                        }
-                    @endphp
-                    <div class="p-4 bg-slate-700/30 rounded-xl">
-                        <p class="text-xs text-slate-400 uppercase tracking-wide">Epoch</p>
-                        <p class="text-lg font-semibold mt-1 text-white">{{ $lastEpoch ? $lastEpoch.' / '.($job->total_epoch ?? $lastEpoch) : '-' }}</p>
-                    </div>
-                    <div class="p-4 bg-slate-700/30 rounded-xl">
-                        <p class="text-xs text-slate-400 uppercase tracking-wide">Accuracy</p>
-                        <p class="text-lg font-semibold mt-1 text-white">{{ $job->accuracy_result ? number_format($job->accuracy_result * 100, 1).'%' : '-' }}</p>
-                    </div>
-                    <div class="p-4 bg-slate-700/30 rounded-xl">
-                        <p class="text-xs text-slate-400 uppercase tracking-wide">Loss</p>
-                        <p class="text-lg font-semibold mt-1 text-white">{{ $job->loss_result ? number_format($job->loss_result, 4) : '-' }}</p>
-                    </div>
-                </div>
             </div>
 
             @if($job->status === 'completed')
@@ -180,7 +192,7 @@
                     <p class="text-xs text-slate-500 mt-2">Overall Progress</p>
                 </div>
 
-                <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 flex-1">
+                <div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-4 flex-1">
                     <div class="p-4 bg-slate-700/30 rounded-xl">
                         <p class="text-xs text-slate-400 uppercase tracking-wide">Status</p>
                         <p id="status-text" class="text-lg font-semibold mt-1 text-yellow-400">Pending</p>
@@ -192,6 +204,18 @@
                     <div class="p-4 bg-slate-700/30 rounded-xl">
                         <p class="text-xs text-slate-400 uppercase tracking-wide">Accuracy</p>
                         <p id="accuracy-text" class="text-lg font-semibold mt-1 text-white">-</p>
+                    </div>
+                    <div class="p-4 bg-slate-700/30 rounded-xl">
+                        <p class="text-xs text-slate-400 uppercase tracking-wide">Precision</p>
+                        <p id="precision-text" class="text-lg font-semibold mt-1 text-white">-</p>
+                    </div>
+                    <div class="p-4 bg-slate-700/30 rounded-xl">
+                        <p class="text-xs text-slate-400 uppercase tracking-wide">Recall</p>
+                        <p id="recall-text" class="text-lg font-semibold mt-1 text-white">-</p>
+                    </div>
+                    <div class="p-4 bg-slate-700/30 rounded-xl">
+                        <p class="text-xs text-slate-400 uppercase tracking-wide">F1-Score</p>
+                        <p id="f1-text" class="text-lg font-semibold mt-1 text-white">-</p>
                     </div>
                     <div class="p-4 bg-slate-700/30 rounded-xl">
                         <p class="text-xs text-slate-400 uppercase tracking-wide">Loss</p>
@@ -316,6 +340,9 @@ function activateModel() {
     const statusEl = document.getElementById('status-text');
     const epochEl = document.getElementById('epoch-text');
     const accuracyEl = document.getElementById('accuracy-text');
+    const precisionEl = document.getElementById('precision-text');
+    const recallEl = document.getElementById('recall-text');
+    const f1El = document.getElementById('f1-text');
     const lossEl = document.getElementById('loss-text');
     const progressBar = document.getElementById('progress-bar');
     const progressLabel = document.getElementById('progress-label');
@@ -393,6 +420,12 @@ function activateModel() {
         epochEl.textContent = (data.current_epoch || 0) + ' / ' + (data.total_epoch || '-');
         accuracyEl.textContent = data.accuracy !== null && data.accuracy !== undefined
             ? (data.accuracy * 100).toFixed(1) + '%' : '-';
+        precisionEl.textContent = data.precision !== null && data.precision !== undefined
+            ? (data.precision * 100).toFixed(1) + '%' : '-';
+        recallEl.textContent = data.recall !== null && data.recall !== undefined
+            ? (data.recall * 100).toFixed(1) + '%' : '-';
+        f1El.textContent = data.f1_score !== null && data.f1_score !== undefined
+            ? (data.f1_score * 100).toFixed(1) + '%' : '-';
         lossEl.textContent = data.loss !== null && data.loss !== undefined
             ? data.loss.toFixed(4) : '-';
 
@@ -412,7 +445,7 @@ function activateModel() {
 
     function showCompleted(data) {
         completedSection.style.display = 'block';
-        completedMetrics.textContent = 'Accuracy: ' + (data.accuracy * 100).toFixed(1) + '% | Loss: ' + (data.loss ? data.loss.toFixed(4) : '-');
+        completedMetrics.textContent = 'Accuracy: ' + (data.accuracy * 100).toFixed(1) + '% | Precision: ' + ((data.precision || 0) * 100).toFixed(1) + '% | Recall: ' + ((data.recall || 0) * 100).toFixed(1) + '% | F1: ' + ((data.f1_score || 0) * 100).toFixed(1) + '% | Loss: ' + (data.loss ? data.loss.toFixed(4) : '-');
     }
 
     function showFailed(data) {

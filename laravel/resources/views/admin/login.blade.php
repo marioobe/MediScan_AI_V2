@@ -43,7 +43,7 @@
                     <label class="block text-sm font-medium text-slate-300 mb-1">Email</label>
                     <input type="email" name="email" value="{{ old('email') }}" required autofocus
                         class="w-full px-4 py-3 rounded-lg border border-slate-700 bg-slate-900/60 text-white placeholder-slate-500 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition"
-                        placeholder="admin@medical-classifier.com">
+                        placeholder="admin@gmail.com">
                 </div>
                 <div class="mb-4">
                     <label class="block text-sm font-medium text-slate-300 mb-1">Password</label>

@@ -11,6 +11,7 @@ class TrainingJob extends Model
     protected $fillable = [
         'job_id', 'dataset_path', 'status', 'current_epoch', 'total_epoch',
         'progress_percent', 'accuracy_result', 'loss_result',
+        'precision_result', 'recall_result', 'f1_score_result',
         'error_message', 'epoch_history', 'log', 'started_at', 'finished_at', 'created_by'
     ];
 

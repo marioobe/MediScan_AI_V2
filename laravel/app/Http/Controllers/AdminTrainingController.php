@@ -151,6 +151,9 @@ class AdminTrainingController extends Controller
             'status'         => 'required|string',
             'accuracy'       => 'nullable|numeric',
             'loss'           => 'nullable|numeric',
+            'precision'      => 'nullable|numeric',
+            'recall'         => 'nullable|numeric',
+            'f1_score'       => 'nullable|numeric',
             'epoch_history'  => 'nullable|array',
             'current_epoch'  => 'nullable|integer',
             'total_epoch'    => 'nullable|integer',
@@ -163,11 +166,14 @@ class AdminTrainingController extends Controller
         }
 
         $updateData = [
-            'status'          => $validated['status'],
-            'accuracy_result' => $validated['accuracy'] ?? null,
-            'loss_result'     => $validated['loss'] ?? null,
-            'epoch_history'   => $validated['epoch_history'] ?? null,
-            'finished_at'     => now(),
+            'status'           => $validated['status'],
+            'accuracy_result'  => $validated['accuracy'] ?? null,
+            'loss_result'      => $validated['loss'] ?? null,
+            'precision_result' => $validated['precision'] ?? null,
+            'recall_result'    => $validated['recall'] ?? null,
+            'f1_score_result'  => $validated['f1_score'] ?? null,
+            'epoch_history'    => $validated['epoch_history'] ?? null,
+            'finished_at'      => now(),
         ];
 
         if (isset($validated['current_epoch'])) {

@@ -47,6 +47,9 @@
                         <tr class="border-b border-slate-700"><th class="text-left py-3 px-4 text-sm font-medium text-slate-400 uppercase">Name / ID</th>
                             <th class="text-left py-3 px-4 text-sm font-medium text-slate-400 uppercase">Classes</th>
                             <th class="text-left py-3 px-4 text-sm font-medium text-slate-400 uppercase">Accuracy</th>
+                            <th class="text-left py-3 px-4 text-sm font-medium text-slate-400 uppercase hidden lg:table-cell">Precision</th>
+                            <th class="text-left py-3 px-4 text-sm font-medium text-slate-400 uppercase hidden lg:table-cell">Recall</th>
+                            <th class="text-left py-3 px-4 text-sm font-medium text-slate-400 uppercase hidden lg:table-cell">F1</th>
                             <th class="text-left py-3 px-4 text-sm font-medium text-slate-400 uppercase hidden md:table-cell">Loss</th>
                             <th class="text-left py-3 px-4 text-sm font-medium text-slate-400 uppercase">Status</th>
                             <th class="text-left py-3 px-4 text-sm font-medium text-slate-400 uppercase">Actions</th>
@@ -57,6 +60,7 @@
                         @php
                             $displayName = $model['local_name'] ?? $model['model_id'];
                             $cmUrl = env('AI_SERVICE_URL', 'http://localhost:8001') . '/files/confusion_matrix/' . $model['model_id'];
+                            $historyUrl = env('AI_SERVICE_URL', 'http://localhost:8001') . '/files/training_history/' . $model['model_id'];
                         @endphp
                         <tr class="border-b border-slate-700/50 hover:bg-slate-700/30 transition model-row" id="model-row-{{ $model['model_id'] }}" data-name="{{ strtolower($displayName) }}" data-id="{{ $model['model_id'] }}">
                             <td class="py-3 px-4">
@@ -85,6 +89,15 @@
                                     <span class="text-sm text-slate-400">-</span>
                                 @endif
                             </td>
+                            <td class="py-3 px-4 hidden lg:table-cell">
+                                <span class="text-sm text-slate-300">{{ $model['precision'] !== null ? number_format($model['precision'] * 100, 1).'%' : '-' }}</span>
+                            </td>
+                            <td class="py-3 px-4 hidden lg:table-cell">
+                                <span class="text-sm text-slate-300">{{ $model['recall'] !== null ? number_format($model['recall'] * 100, 1).'%' : '-' }}</span>
+                            </td>
+                            <td class="py-3 px-4 hidden lg:table-cell">
+                                <span class="text-sm text-slate-300">{{ $model['f1_score'] !== null ? number_format($model['f1_score'] * 100, 1).'%' : '-' }}</span>
+                            </td>
                             <td class="py-3 px-4 text-sm text-slate-400 hidden md:table-cell">{{ $model['loss'] !== null ? number_format($model['loss'], 4) : '-' }}</td>
                             <td class="py-3 px-4">
                                 @if($model['is_active'])
@@ -111,6 +124,18 @@
                                     <button onclick="openCmModal('{{ $cmUrl }}', '{{ $displayName }}')"
                                         class="px-3 py-1.5 border border-slate-600 text-slate-300 rounded-lg text-xs font-medium hover:bg-slate-700/50 transition">
                                         CM
+                                    </button>
+                                    @endif
+                                    @if($model['has_history'])
+                                    <button onclick="openHistoryModal('{{ $historyUrl }}', '{{ $displayName }}')"
+                                        class="px-3 py-1.5 border border-slate-600 text-slate-300 rounded-lg text-xs font-medium hover:bg-slate-700/50 transition">
+                                        History
+                                    </button>
+                                    @endif
+                                    @if($model['has_classification_report'])
+                                    <button onclick="openReportModal('{{ $model['model_id'] }}', '{{ $displayName }}')"
+                                        class="px-3 py-1.5 border border-slate-600 text-slate-300 rounded-lg text-xs font-medium hover:bg-slate-700/50 transition">
+                                        Report
                                     </button>
                                     @endif
                                     <button onclick="openEditModal('{{ $model['model_id'] }}', '{{ addslashes($model['local_name'] ?? '') }}', '{{ addslashes($model['local_notes'] ?? '') }}')"
@@ -166,6 +191,71 @@
                 </div>
                 <img id="cm-image" src="" alt="Confusion Matrix" class="max-h-[60vh] w-auto mx-auto hidden rounded-lg shadow-md">
                 <div id="cm-analysis" class="hidden mt-6 space-y-3 text-sm"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{{-- History Modal --}}
+<div id="history-modal" class="fixed inset-0 z-50 hidden" aria-modal="true">
+    <div class="absolute inset-0 bg-black/60 backdrop-blur-sm" onclick="closeHistoryModal()"></div>
+    <div class="relative min-h-screen flex items-center justify-center p-4">
+        <div class="bg-slate-800 rounded-2xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
+            <div class="flex items-center justify-between p-5 border-b border-slate-700">
+                <h3 class="text-lg font-semibold text-white">
+                    Training History — <span id="history-title" class="text-indigo-400"></span>
+                </h3>
+                <button onclick="closeHistoryModal()" class="p-1 text-slate-500 hover:text-slate-300 transition">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                    </svg>
+                </button>
+            </div>
+            <div class="p-6 bg-slate-900/30">
+                <div id="history-loading" class="text-center py-10">
+                    <div class="animate-spin w-10 h-10 border-4 border-indigo-500 border-t-transparent rounded-full mx-auto mb-3"></div>
+                    <p class="text-slate-500 text-sm">Loading training history...</p>
+                </div>
+                <img id="history-image" src="" alt="Training History" class="max-h-[70vh] w-auto mx-auto hidden rounded-lg shadow-md">
+            </div>
+        </div>
+    </div>
+</div>
+
+{{-- Classification Report Modal --}}
+<div id="report-modal" class="fixed inset-0 z-50 hidden" aria-modal="true">
+    <div class="absolute inset-0 bg-black/60 backdrop-blur-sm" onclick="closeReportModal()"></div>
+    <div class="relative min-h-screen flex items-center justify-center p-4">
+        <div class="bg-slate-800 rounded-2xl shadow-2xl max-w-3xl w-full max-h-[90vh] overflow-y-auto">
+            <div class="flex items-center justify-between p-5 border-b border-slate-700">
+                <h3 class="text-lg font-semibold text-white">
+                    Classification Report — <span id="report-title" class="text-indigo-400"></span>
+                </h3>
+                <button onclick="closeReportModal()" class="p-1 text-slate-500 hover:text-slate-300 transition">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                    </svg>
+                </button>
+            </div>
+            <div class="p-6">
+                <div id="report-loading" class="text-center py-10">
+                    <div class="animate-spin w-10 h-10 border-4 border-indigo-500 border-t-transparent rounded-full mx-auto mb-3"></div>
+                    <p class="text-slate-500 text-sm">Loading classification report...</p>
+                </div>
+                <div id="report-content" class="hidden overflow-x-auto">
+                    <table class="w-full text-sm">
+                        <thead>
+                            <tr class="border-b border-slate-700 text-left text-xs text-slate-400 uppercase tracking-wide">
+                                <th class="py-3 pr-4">Class</th>
+                                <th class="py-3 pr-4 text-right">Precision</th>
+                                <th class="py-3 pr-4 text-right">Recall</th>
+                                <th class="py-3 pr-4 text-right">F1-Score</th>
+                                <th class="py-3 pr-4 text-right">Support</th>
+                            </tr>
+                        </thead>
+                        <tbody id="report-tbody"></tbody>
+                    </table>
+                </div>
             </div>
         </div>
     </div>
@@ -444,6 +534,109 @@ function closeCmModal() {
     document.getElementById('cm-analysis').innerHTML = '';
 }
 
+// ===== History Modal =====
+function openHistoryModal(url, title) {
+    document.getElementById('history-title').textContent = title;
+    document.getElementById('history-image').classList.add('hidden');
+    document.getElementById('history-loading').classList.remove('hidden');
+    document.getElementById('history-modal').classList.remove('hidden');
+
+    var img = document.getElementById('history-image');
+    img.onload = function() {
+        document.getElementById('history-loading').classList.add('hidden');
+        img.classList.remove('hidden');
+    };
+    img.onerror = function() {
+        document.getElementById('history-loading').innerHTML =
+            '<p class="text-red-500 text-sm">Failed to load training history.</p>';
+    };
+    img.src = url;
+}
+
+function closeHistoryModal() {
+    document.getElementById('history-modal').classList.add('hidden');
+    document.getElementById('history-image').classList.add('hidden');
+}
+
+// ===== Report Modal =====
+function openReportModal(modelId, title) {
+    document.getElementById('report-title').textContent = title;
+    document.getElementById('report-content').classList.add('hidden');
+    document.getElementById('report-loading').classList.remove('hidden');
+    document.getElementById('report-modal').classList.remove('hidden');
+
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', aiServiceUrl + '/files/classification_report_data/' + modelId);
+    xhr.onload = function() {
+        document.getElementById('report-loading').classList.add('hidden');
+        if (xhr.status >= 200 && xhr.status < 300) {
+            try {
+                var data = JSON.parse(xhr.responseText);
+                renderReportTable(data);
+            } catch (_) {
+                document.getElementById('report-content').innerHTML = '<p class="text-red-500 text-sm">Invalid report data.</p>';
+                document.getElementById('report-content').classList.remove('hidden');
+            }
+        } else {
+            document.getElementById('report-content').innerHTML = '<p class="text-red-500 text-sm">Failed to load report.</p>';
+            document.getElementById('report-content').classList.remove('hidden');
+        }
+    };
+    xhr.onerror = function() {
+        document.getElementById('report-loading').classList.add('hidden');
+        document.getElementById('report-content').innerHTML = '<p class="text-red-500 text-sm">Connection lost.</p>';
+        document.getElementById('report-content').classList.remove('hidden');
+    };
+    xhr.send();
+}
+
+function renderReportTable(data) {
+    var tbody = document.getElementById('report-tbody');
+    var html = '';
+    var orderedKeys = Object.keys(data).filter(function(k) {
+        return k !== 'accuracy' && !k.startsWith('macro ') && !k.startsWith('weighted ');
+    });
+
+    orderedKeys.forEach(function(cls) {
+        var m = data[cls];
+        html += '<tr class="border-b border-slate-700/50">';
+        html += '<td class="py-3 pr-4 text-sm font-medium text-white">' + cls + '</td>';
+        html += '<td class="py-3 pr-4 text-right text-sm font-mono text-indigo-300">' + (m.precision !== undefined ? (m.precision * 100).toFixed(1) + '%' : '-') + '</td>';
+        html += '<td class="py-3 pr-4 text-right text-sm font-mono text-indigo-300">' + (m.recall !== undefined ? (m.recall * 100).toFixed(1) + '%' : '-') + '</td>';
+        html += '<td class="py-3 pr-4 text-right text-sm font-mono text-indigo-300">' + (m['f1-score'] !== undefined ? (m['f1-score'] * 100).toFixed(1) + '%' : '-') + '</td>';
+        html += '<td class="py-3 pr-4 text-right text-sm font-mono text-slate-400">' + (m.support !== undefined ? m.support : '-') + '</td>';
+        html += '</tr>';
+    });
+
+    // Macro avg row
+    if (data['macro avg']) {
+        var ma = data['macro avg'];
+        html += '<tr class="bg-indigo-900/20 border-t-2 border-indigo-700">';
+        html += '<td class="py-3 pr-4 text-sm font-semibold text-indigo-300">Macro Avg</td>';
+        html += '<td class="py-3 pr-4 text-right text-sm font-mono font-semibold text-white">' + (ma.precision !== undefined ? (ma.precision * 100).toFixed(1) + '%' : '-') + '</td>';
+        html += '<td class="py-3 pr-4 text-right text-sm font-mono font-semibold text-white">' + (ma.recall !== undefined ? (ma.recall * 100).toFixed(1) + '%' : '-') + '</td>';
+        html += '<td class="py-3 pr-4 text-right text-sm font-mono font-semibold text-white">' + (ma['f1-score'] !== undefined ? (ma['f1-score'] * 100).toFixed(1) + '%' : '-') + '</td>';
+        html += '<td class="py-3 pr-4 text-right text-sm font-mono text-slate-400">' + (ma.support !== undefined ? ma.support : '-') + '</td>';
+        html += '</tr>';
+    }
+
+    // Overall accuracy row
+    if (data.accuracy !== undefined) {
+        html += '<tr class="bg-green-900/20 border-t-2 border-green-700">';
+        html += '<td class="py-3 pr-4 text-sm font-semibold text-green-400">Accuracy</td>';
+        html += '<td class="py-3 pr-4 text-right text-sm font-mono font-semibold text-white" colspan="4">' + (data.accuracy * 100).toFixed(1) + '%</td>';
+        html += '</tr>';
+    }
+
+    tbody.innerHTML = html;
+    document.getElementById('report-content').classList.remove('hidden');
+}
+
+function closeReportModal() {
+    document.getElementById('report-modal').classList.add('hidden');
+    document.getElementById('report-content').classList.add('hidden');
+}
+
 // ===== Edit Modal =====
 var editingModelId = null;
 
@@ -556,10 +749,14 @@ function closeCreateModal() {
 // ===== Click outside modals =====
 document.addEventListener('click', function(e) {
     var cm = document.getElementById('cm-modal');
+    var history = document.getElementById('history-modal');
+    var report = document.getElementById('report-modal');
     var edit = document.getElementById('edit-modal');
     var create = document.getElementById('create-modal');
 
     if (e.target === cm) closeCmModal();
+    if (e.target === history) closeHistoryModal();
+    if (e.target === report) closeReportModal();
     if (e.target === edit) closeEditModal();
     if (e.target === create) closeCreateModal();
 });

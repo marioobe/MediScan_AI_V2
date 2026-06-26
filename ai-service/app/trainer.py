@@ -12,8 +12,11 @@ import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import confusion_matrix, classification_report
+from sklearn.metrics import (
+    confusion_matrix, classification_report,
+    precision_score, recall_score, f1_score, accuracy_score
+)
+from sklearn.utils.class_weight import compute_class_weight
 import seaborn as sns
 
 import tensorflow as tf
@@ -21,14 +24,38 @@ from tensorflow.keras.applications import MobileNetV2
 from tensorflow.keras.applications.mobilenet_v2 import preprocess_input
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
 from tensorflow.keras.models import Model
-from tensorflow.keras.layers import Dense, Dropout, GlobalAveragePooling2D, RandomFlip, RandomRotation, RandomZoom
+from tensorflow.keras.layers import Dense
 from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
 
 from app.config import (
     DATASETS_DIR, MODELS_DIR, VALID_EXTENSIONS, MASK_KEYWORDS,
     MIN_IMAGES_PER_CLASS, WARNING_IMAGES_PER_CLASS, IMG_SIZE, RANDOM_SEED, MAX_DATASET_SIZE_MB
 )
+
+
+class SparseFocalLoss(tf.keras.losses.Loss):
+    def __init__(self, gamma=2.0, alpha=0.25, from_logits=False, **kwargs):
+        super().__init__(**kwargs)
+        self.gamma = gamma
+        self.alpha = alpha
+        self.from_logits = from_logits
+
+    def call(self, y_true, y_pred):
+        epsilon = tf.keras.backend.epsilon()
+        if self.from_logits:
+            y_pred = tf.nn.softmax(y_pred, axis=-1)
+        y_pred = tf.clip_by_value(y_pred, epsilon, 1.0 - epsilon)
+        y_true = tf.cast(y_true, tf.int32)
+        y_true_one_hot = tf.one_hot(y_true, tf.shape(y_pred)[-1])
+        cross_entropy = -y_true_one_hot * tf.math.log(y_pred)
+        focal_weight = tf.pow(1.0 - y_pred, self.gamma) * y_true_one_hot
+        focal_loss = self.alpha * focal_weight * cross_entropy
+        return tf.reduce_sum(focal_loss, axis=-1)
+
+    def get_config(self):
+        config = super().get_config()
+        config.update({"gamma": self.gamma, "alpha": self.alpha, "from_logits": self.from_logits})
+        return config
 
 jobs = {}
 
@@ -119,44 +146,11 @@ def _validate_dataset(job_id, dataset_path):
     _log(job_id, f"Total gambar valid: {total}")
     return classes, class_counts
 
-def _compute_class_weight(class_counts):
-    class_names = sorted(class_counts.keys())
-    counts = np.array([len(class_counts[c]) for c in class_names])
-    total = counts.sum()
-    n = len(class_names)
-    weights = total / (n * counts)
-    return {i: float(w) for i, w in enumerate(weights)}
-
-def _split_data(job_id, dataset_path, classes, class_counts, val_split=0.15, test_split=0.15):
-    _update_job(job_id, status="extracting")
-    train_paths = []
-    val_paths = []
-    test_paths = []
-    for cls in classes:
-        files = class_counts[cls]
-        indices = list(range(len(files)))
-        train_idx, temp_idx = train_test_split(
-            indices, test_size=(val_split + test_split),
-            random_state=RANDOM_SEED, stratify=None
-        )
-        val_count = int(len(temp_idx) * (val_split / (val_split + test_split)))
-        val_idx = temp_idx[:val_count]
-        test_idx = temp_idx[val_count:]
-        for i in train_idx:
-            train_paths.append((os.path.join(dataset_path, cls, files[i]), cls))
-        for i in val_idx:
-            val_paths.append((os.path.join(dataset_path, cls, files[i]), cls))
-        for i in test_idx:
-            test_paths.append((os.path.join(dataset_path, cls, files[i]), cls))
-    _log(job_id, f"Split: train={len(train_paths)}, val={len(val_paths)}, test={len(test_paths)}")
-    return train_paths, val_paths, test_paths
-
 class ProgressCallback(tf.keras.callbacks.Callback):
-    def __init__(self, job_id, phase_label="", initial_epochs=0):
+    def __init__(self, job_id, epoch_offset=0):
         super().__init__()
         self.job_id = job_id
-        self.phase_label = phase_label
-        self.initial_epochs = initial_epochs
+        self.epoch_offset = epoch_offset
 
     def on_epoch_end(self, epoch, logs=None):
         job = jobs.get(self.job_id)
@@ -165,11 +159,10 @@ class ProgressCallback(tf.keras.callbacks.Callback):
             _log(self.job_id, "Training cancelled by user.")
             return
         logs = logs or {}
-        display_epoch = epoch + 1
+        display_epoch = epoch + 1 + self.epoch_offset
         _update_job(self.job_id, current_epoch=display_epoch)
         ep = {
             "epoch": display_epoch,
-            "phase": self.phase_label,
             "accuracy": float(logs.get("accuracy", 0)),
             "loss": float(logs.get("loss", 0)),
             "val_accuracy": float(logs.get("val_accuracy", 0)),
@@ -182,6 +175,30 @@ class ProgressCallback(tf.keras.callbacks.Callback):
              f"acc={ep['accuracy']:.4f} | val_acc={ep['val_accuracy']:.4f} | "
              f"loss={ep['loss']:.4f} | val_loss={ep['val_loss']:.4f}")
 
+def _evaluate_metrics(model, val_gen, class_names):
+    val_gen.reset()
+    y_true = val_gen.classes
+    y_pred = model.predict(val_gen, verbose=0)
+    y_pred_classes = np.argmax(y_pred, axis=1)
+    acc = accuracy_score(y_true, y_pred_classes)
+    prec = precision_score(y_true, y_pred_classes, average='macro', zero_division=0)
+    rec = recall_score(y_true, y_pred_classes, average='macro', zero_division=0)
+    f1 = f1_score(y_true, y_pred_classes, average='macro', zero_division=0)
+    return {
+        "accuracy": float(acc),
+        "precision": float(prec),
+        "recall": float(rec),
+        "f1_score": float(f1),
+    }, y_pred_classes
+
+def _compute_class_weights(train_gen, class_names):
+    class_counts = np.bincount(train_gen.classes)
+    total = len(train_gen.classes)
+    n_classes = len(class_names)
+    weights = total / (n_classes * class_counts.astype(float))
+    class_weight_dict = {i: float(w) for i, w in enumerate(weights)}
+    return class_weight_dict
+
 def _run_training(job_id, dataset_path, classes, cfg):
     try:
         epochs = cfg.get("epochs", 10)
@@ -189,134 +206,156 @@ def _run_training(job_id, dataset_path, classes, cfg):
         batch_size = cfg.get("batch_size", 32)
         image_size = cfg.get("image_size", 224)
         lr = cfg.get("learning_rate", 0.0001)
-        total_epochs = epochs
-        half_epochs = max(1, total_epochs // 2)
         img_size = (image_size, image_size)
-
-        frozen_epochs = half_epochs
-        fine_tune_epochs = total_epochs - frozen_epochs
 
         _update_job(job_id, status="training", current_epoch=0, total_epoch=epochs, progress_percent=0)
         _log(job_id, "Memulai training...")
-        class_counts = {}
-        for cls in classes:
-            cls_path = os.path.join(dataset_path, cls)
-            files = [f for f in os.listdir(cls_path) if f.endswith((".jpg", ".jpeg", ".png"))]
-            class_counts[cls] = files
         class_names = sorted(classes)
         n_classes = len(class_names)
         _log(job_id, f"Kelas: {class_names}")
-        total_samples = sum(len(v) for v in class_counts.values())
-        _log(job_id, f"Total sampel: {total_samples}")
-        class_weight = _compute_class_weight(class_counts)
-        _log(job_id, f"Class weights: {class_weight}")
-        datagen = ImageDataGenerator(
+        for cls in classes:
+            cls_path = os.path.join(dataset_path, cls)
+            files = [f for f in os.listdir(cls_path) if f.endswith((".jpg", ".jpeg", ".png"))]
+            _log(job_id, f"  Kelas '{cls}': {len(files)} gambar")
+
+        train_datagen = ImageDataGenerator(
+            preprocessing_function=preprocess_input,
+            rotation_range=20,
+            width_shift_range=0.15,
+            height_shift_range=0.15,
+            shear_range=0.15,
+            zoom_range=0.15,
+            brightness_range=(0.8, 1.2),
+            horizontal_flip=True,
+            fill_mode="nearest",
+            validation_split=val_split
+        )
+        val_datagen = ImageDataGenerator(
             preprocessing_function=preprocess_input,
             validation_split=val_split
         )
-        train_gen = datagen.flow_from_directory(
+        train_gen = train_datagen.flow_from_directory(
             dataset_path, target_size=img_size, batch_size=batch_size,
-            class_mode="categorical", classes=class_names,
+            class_mode="sparse", classes=class_names,
             subset="training", seed=RANDOM_SEED, shuffle=True
         )
-        val_gen = datagen.flow_from_directory(
+        val_gen = val_datagen.flow_from_directory(
             dataset_path, target_size=img_size, batch_size=batch_size,
-            class_mode="categorical", classes=class_names,
+            class_mode="sparse", classes=class_names,
             subset="validation", seed=RANDOM_SEED, shuffle=False
         )
         n_train = train_gen.samples
         n_val = val_gen.samples
+        ft_epochs = max(epochs // 2, 5)
+        total_epochs_combined = epochs + ft_epochs
         _log(job_id, f"Train samples: {n_train}, Validation samples: {n_val}")
-        _update_job(job_id, total_epoch=epochs)
-        inputs = tf.keras.Input(shape=(image_size, image_size, 3))
-        augmented = RandomFlip("horizontal_and_vertical")(inputs)
-        augmented = RandomRotation(0.2)(augmented)
-        augmented = RandomZoom(0.2)(augmented)
-        base_model = MobileNetV2(weights="imagenet", include_top=False, pooling="avg", input_tensor=augmented)
+        _update_job(job_id, total_epoch=total_epochs_combined)
+
+        class_weight_dict = _compute_class_weights(train_gen, class_names)
+        _log(job_id, f"Class weights: {class_weight_dict}")
+        _log(job_id, " Focal Loss aktif: gamma=2.0, alpha=0.25 — fokus pada kelas malignant.")
+
+        base_model = MobileNetV2(
+            weights="imagenet", include_top=False, pooling="avg",
+            input_shape=(image_size, image_size, 3)
+        )
         base_model.trainable = False
         x = base_model.output
         x = Dense(256, activation="relu")(x)
-        x = Dropout(0.5)(x)
+        x = tf.keras.layers.Dropout(0.5)(x)
         x = Dense(128, activation="relu")(x)
-        x = Dropout(0.3)(x)
+        x = tf.keras.layers.Dropout(0.3)(x)
         outputs = Dense(n_classes, activation="softmax")(x)
-        model = Model(inputs=inputs, outputs=outputs)
-        model.compile(optimizer=Adam(learning_rate=lr), loss="categorical_crossentropy", metrics=["accuracy"])
-        _log(job_id, "Fase 1: Training dense layers (base frozen)...")
-        prog_cb_1 = ProgressCallback(job_id, phase_label="Fase 1 (Frozen)")
-        early_stop = EarlyStopping(monitor="val_loss", patience=5, restore_best_weights=True, verbose=0)
-        reduce_lr = ReduceLROnPlateau(monitor="val_loss", factor=0.5, patience=3, min_lr=1e-6, verbose=0)
-        history_1 = model.fit(
-            train_gen, epochs=frozen_epochs, validation_data=val_gen,
-            class_weight=class_weight,
-            callbacks=[early_stop, reduce_lr, prog_cb_1],
-            verbose=0
+        model = Model(inputs=base_model.input, outputs=outputs)
+        model.compile(
+            optimizer=Adam(learning_rate=lr),
+            loss=SparseFocalLoss(gamma=2.0, alpha=0.25),
+            metrics=["accuracy"]
         )
-        epoch_1 = len(history_1.history["loss"])
+        _log(job_id, "Model: MobileNetV2 (frozen) + Dense(256,ReLU)+Drop(0.5)+Dense(128,ReLU)+Drop(0.3)+Dense(n,softmax)")
+        _log(job_id, "Fase 1: training classifier head (base frozen)...")
+        prog_cb = ProgressCallback(job_id)
+        history = model.fit(
+            train_gen, epochs=epochs, validation_data=val_gen,
+            class_weight=class_weight_dict,
+            callbacks=[prog_cb], verbose=0
+        )
+        total_epochs_done = len(history.history["loss"])
+
+        if not jobs.get(job_id, {}).get("cancel_requested"):
+            _log(job_id, "Fase 2: fine-tuning (unfreeze layer 120+, lr={:.6f})...".format(lr * 0.1))
+            base_model.trainable = True
+            for layer in base_model.layers[:120]:
+                layer.trainable = False
+            model.compile(
+                optimizer=Adam(learning_rate=lr * 0.1),
+                loss=SparseFocalLoss(gamma=2.0, alpha=0.25),
+                metrics=["accuracy"]
+            )
+            ft_prog_cb = ProgressCallback(job_id, epoch_offset=total_epochs_done)
+            history_ft = model.fit(
+                train_gen, epochs=ft_epochs, validation_data=val_gen,
+                class_weight=class_weight_dict,
+                callbacks=[ft_prog_cb], verbose=0
+            )
+            for k, v in history_ft.history.items():
+                history.history.setdefault(k, []).extend(v)
+            total_epochs_done += len(history_ft.history["loss"])
+            _log(job_id, f"Fine-tuning selesai: +{len(history_ft.history['loss'])} epoch")
         if jobs.get(job_id, {}).get("cancel_requested"):
             _update_job(job_id, status="cancelled", progress_percent=0)
-            _log(job_id, "Training dibatalkan setelah Fase 1.")
+            _log(job_id, "Training dibatalkan.")
             return
-        _log(job_id, f"Fase 1 selesai: {epoch_1} epoch, val_acc={history_1.history['val_accuracy'][-1]:.4f}")
-        base_model.trainable = True
-        for layer in base_model.layers[:120]:
-            layer.trainable = False
-        model.compile(optimizer=Adam(learning_rate=1e-5), loss="categorical_crossentropy", metrics=["accuracy"])
-        _log(job_id, "Fase 2: Fine-tuning dari layer 120+...")
-        prog_cb_2 = ProgressCallback(job_id, phase_label="Fase 2 (Fine-tune)")
-        total_target_epochs = epoch_1 + fine_tune_epochs
-        history_2 = model.fit(
-            train_gen, initial_epoch=epoch_1, epochs=total_target_epochs, validation_data=val_gen,
-            class_weight=class_weight,
-            callbacks=[early_stop, reduce_lr, prog_cb_2],
-            verbose=0
-        )
-        epoch_2 = len(history_2.history["loss"])
-        if jobs.get(job_id, {}).get("cancel_requested"):
-            _update_job(job_id, status="cancelled", progress_percent=0)
-            _log(job_id, "Training dibatalkan setelah Fase 2.")
-            return
-        _log(job_id, f"Fase 2 selesai: {epoch_2} epoch, val_acc={history_2.history['val_accuracy'][-1]:.4f}")
-        total_epochs = epoch_1 + epoch_2
-        full_history = {}
-        for key in history_1.history:
-            full_history[key] = history_1.history[key] + history_2.history.get(key, [])
-        val_acc = full_history["val_accuracy"][-1]
-        val_loss = full_history["val_loss"][-1]
-        _log(job_id, f"Final validation accuracy: {val_acc:.4f}, loss: {val_loss:.4f}")
+        val_acc = history.history["val_accuracy"][-1]
+        val_loss = history.history["val_loss"][-1]
+        _log(job_id, f"Training selesai: {total_epochs_done} epoch, val_acc={val_acc:.4f}, val_loss={val_loss:.4f}")
+
+        metrics_dict, y_pred_classes = _evaluate_metrics(model, val_gen, class_names)
+        _log(job_id, f"Evaluasi: accuracy={metrics_dict['accuracy']*100:.2f}%, precision={metrics_dict['precision']*100:.2f}%, recall={metrics_dict['recall']*100:.2f}%, f1={metrics_dict['f1_score']*100:.2f}%")
+
         model_id = str(uuid.uuid4())[:8]
         model_filename = f"model_{model_id}.keras"
         model_path = os.path.join(MODELS_DIR, model_filename)
         model.save(model_path)
         _log(job_id, f"Model saved: {model_path}")
+
         history_path = os.path.join(MODELS_DIR, f"history_{model_id}.json")
-        history_serializable = {k: [float(v) for v in vals] for k, vals in full_history.items()}
+        history_serializable = {k: [float(v) for v in vals] for k, vals in history.history.items()}
         with open(history_path, "w") as f:
             json.dump(history_serializable, f)
         class_names_path = os.path.join(MODELS_DIR, f"class_names_{model_id}.json")
         with open(class_names_path, "w") as f:
             json.dump(class_names, f)
+        metrics_path = os.path.join(MODELS_DIR, f"metrics_{model_id}.json")
+        with open(metrics_path, "w") as f:
+            json.dump(metrics_dict, f, indent=2)
+
         cm_filename = f"confusion_matrix_{model_id}.png"
         cm_path = os.path.join(MODELS_DIR, cm_filename)
         _generate_confusion_matrix(model, val_gen, class_names, cm_path)
         report_filename = f"classification_report_{model_id}.json"
         report_path = os.path.join(MODELS_DIR, report_filename)
         _generate_classification_report(model, val_gen, class_names, report_path)
-        _log(job_id, "Confusion matrix & classification report saved.")
+        _log(job_id, "Confusion matrix & classification report & metrics saved.")
+
         _update_job(
             job_id,
             status="completed",
             progress_percent=100,
-            current_epoch=total_epochs,
-            total_epoch=total_epochs,
-            accuracy_result=float(val_acc),
+            current_epoch=total_epochs_done,
+            total_epoch=total_epochs_done,
+            accuracy_result=float(metrics_dict["accuracy"]),
             loss_result=float(val_loss),
+            precision_result=float(metrics_dict["precision"]),
+            recall_result=float(metrics_dict["recall"]),
+            f1_score_result=float(metrics_dict["f1_score"]),
             model_id=model_id,
             model_path=model_filename,
             class_names=class_names,
             history_path=history_path,
             confusion_matrix_path=cm_filename,
-            classification_report_path=report_filename
+            classification_report_path=report_filename,
+            metrics_path=metrics_path,
         )
         _log(job_id, "Training selesai!")
         try:
@@ -328,16 +367,18 @@ def _run_training(job_id, dataset_path, classes, cfg):
             epoch_history = job_data.get("epochs", [])
             current_epoch = job_data.get("current_epoch", 0)
             total_epoch = job_data.get("total_epoch", 0)
-            model_id = job_data.get("model_id", "")
             resp = requests.post(laravel_url, json={
                 "job_id": job_id,
                 "status": "Completed",
-                "accuracy": float(val_acc),
+                "accuracy": float(metrics_dict["accuracy"]),
                 "loss": float(val_loss),
+                "precision": float(metrics_dict["precision"]),
+                "recall": float(metrics_dict["recall"]),
+                "f1_score": float(metrics_dict["f1_score"]),
                 "epoch_history": epoch_history,
                 "current_epoch": current_epoch,
                 "total_epoch": total_epoch,
-                "model_id": model_id,
+                "model_id": job_data.get("model_id", ""),
             }, timeout=5)
             if resp.ok:
                 _log(job_id, f"Notifikasi ke Laravel: HTTP {resp.status_code} OK")
@@ -394,6 +435,9 @@ def start_training(zip_path, epochs=10, validation_split=0.3, batch_size=32, ima
         "progress_percent": 0,
         "accuracy_result": None,
         "loss_result": None,
+        "precision_result": None,
+        "recall_result": None,
+        "f1_score_result": None,
         "error_message": None,
         "log": "",
         "model_id": None,
@@ -402,6 +446,7 @@ def start_training(zip_path, epochs=10, validation_split=0.3, batch_size=32, ima
         "history_path": None,
         "confusion_matrix_path": None,
         "classification_report_path": None,
+        "metrics_path": None,
         "epochs": [],
         "cancel_requested": False,
         "config": {

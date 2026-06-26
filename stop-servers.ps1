@@ -11,7 +11,7 @@ Write-Host "========================================" -ForegroundColor Cyan
 $foundAny = $false
 
 foreach ($svc in $C_Ports) {
-    $connections = netstat -ano 2>$null | Select-String ":$($svc.Port)\s"
+    $connections = netstat -ano 2>$null | Select-String ":$($svc.Port)\s.*LISTENING"
     $procIds = @()
     foreach ($conn in $connections) {
         $parts = ($conn -split '\s+') | Where-Object { $_ -ne '' }
@@ -36,12 +36,28 @@ foreach ($svc in $C_Ports) {
             $proc = Get-Process -Id $foundId -ErrorAction Stop
             $procNames += "$($proc.Name).exe (PID $foundId)"
             Stop-Process -Id $foundId -Force -ErrorAction Stop
+            Get-Process -Id $foundId -ErrorAction SilentlyContinue | ForEach-Object { $_.CloseMainWindow() | Out-Null }
         } catch {
             Write-Host "  [WARN] Failed to stop PID $foundId : $_" -ForegroundColor Yellow
         }
     }
 
     Write-Host ("  [OK] Stopped {0,-25} (port {1}) - {2}" -f $svc.Name, $svc.Port, ($procNames -join ", ")) -ForegroundColor Green
+}
+
+# Fallback: kill orphan python/php/node processes by name if any still linger
+$orphanProcs = @()
+$orphanProcs += Get-Process -Name "python" -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle -eq "" -and $_.Id -ne $PID }
+$orphanProcs += Get-Process -Name "php" -ErrorAction SilentlyContinue
+$orphanProcs += Get-Process -Name "node" -ErrorAction SilentlyContinue
+$orphanProcs | Sort-Object Id -Unique | ForEach-Object {
+    try {
+        Stop-Process -Id $_.Id -Force -ErrorAction Stop
+        Write-Host ("  [CLEANUP] Killed orphan: {0}.exe (PID {1})" -f $_.Name, $_.Id) -ForegroundColor DarkYellow
+        $foundAny = $true
+    } catch {
+        # ignore
+    }
 }
 
 if (-not $foundAny) {
