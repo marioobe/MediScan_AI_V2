@@ -144,6 +144,7 @@ async def create_training(
         batch_size=batch_size,
         image_size=image_size,
         learning_rate=learning_rate,
+        dataset_filename=file.filename,
     )
     return {"job_id": job_id, "status": "pending"}
 
@@ -238,6 +239,15 @@ async def get_classification_report_data(model_id: str):
     path = os.path.join(MODELS_DIR, f"classification_report_{model_id}.json")
     if not os.path.exists(path):
         raise HTTPException(404, "Classification report not found")
+    with open(path, "r") as f:
+        data = json.load(f)
+    return JSONResponse(data)
+
+@app.get("/files/training_history_data/{model_id}")
+async def get_training_history_data(model_id: str):
+    path = os.path.join(MODELS_DIR, f"history_{model_id}.json")
+    if not os.path.exists(path):
+        raise HTTPException(404, "Training history data not found")
     with open(path, "r") as f:
         data = json.load(f)
     return JSONResponse(data)
@@ -366,6 +376,7 @@ async def list_models():
                 cr_path = os.path.join(MODELS_DIR, f"classification_report_{model_id}.json")
                 history_path = os.path.join(MODELS_DIR, f"history_{model_id}.json")
                 metrics_path = os.path.join(MODELS_DIR, f"metrics_{model_id}.json")
+                config_path = os.path.join(MODELS_DIR, f"config_{model_id}.json")
                 cn_path = os.path.join(MODELS_DIR, f"class_names_{model_id}.json")
                 class_names = []
                 if os.path.exists(cn_path):
@@ -379,6 +390,10 @@ async def list_models():
                 if os.path.exists(metrics_path):
                     with open(metrics_path, "r") as fh:
                         metrics = json.load(fh)
+                config_data = {}
+                if os.path.exists(config_path):
+                    with open(config_path, "r") as fh:
+                        config_data = json.load(fh)
                 val_acc = history.get("val_accuracy", [None])[-1]
                 val_loss = history.get("val_loss", [None])[-1]
                 active = _get_active_model()
@@ -395,6 +410,7 @@ async def list_models():
                     "has_confusion_matrix": os.path.exists(cm_path),
                     "has_classification_report": os.path.exists(cr_path),
                     "has_history": os.path.exists(history_path),
+                    "training_config": config_data,
                 })
     return sorted(models, key=lambda x: x["is_active"], reverse=True)
 
@@ -419,6 +435,7 @@ async def delete_model(model_id: str):
         f"classification_report_{model_id}.json",
         f"history_{model_id}.json",
         f"metrics_{model_id}.json",
+        f"config_{model_id}.json",
         f"class_names_{model_id}.json",
     ]
     for pattern in patterns:

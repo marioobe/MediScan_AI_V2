@@ -57,11 +57,18 @@
                     </thead>
                     <tbody id="models-tbody">
                         @foreach($models as $model)
-                        @php
-                            $displayName = $model['local_name'] ?? $model['model_id'];
-                            $cmUrl = env('AI_SERVICE_URL', 'http://localhost:8001') . '/files/confusion_matrix/' . $model['model_id'];
-                            $historyUrl = env('AI_SERVICE_URL', 'http://localhost:8001') . '/files/training_history/' . $model['model_id'];
-                        @endphp
+@php
+    $displayName = $model['local_name'] ?? $model['model_id'];
+    $cmUrl = env('AI_SERVICE_URL', 'http://localhost:8001') . '/files/confusion_matrix/' . $model['model_id'];
+    $historyUrl = env('AI_SERVICE_URL', 'http://localhost:8001') . '/files/training_history/' . $model['model_id'];
+    $config = $model['training_config'] ?? [];
+    $datasetName = $config['dataset_filename'] ?? '-';
+    $epochsVal = $config['epochs'] ?? '-';
+    $valSplitVal = $config['validation_split'] ?? null;
+    $batchSizeVal = $config['batch_size'] ?? '-';
+    $imageSizeVal = $config['image_size'] ?? '-';
+    $lrVal = $config['learning_rate'] ?? '-';
+@endphp
                         <tr class="border-b border-slate-700/50 hover:bg-slate-700/30 transition model-row" id="model-row-{{ $model['model_id'] }}" data-name="{{ strtolower($displayName) }}" data-id="{{ $model['model_id'] }}">
                             <td class="py-3 px-4">
                                 <div class="text-sm font-medium text-slate-100 model-name">{{ $displayName }}</div>
@@ -120,24 +127,24 @@
                                         </button>
                                     </form>
                                     @endif
-                                    @if($model['has_confusion_matrix'])
-                                    <button onclick="openCmModal('{{ $cmUrl }}', '{{ $displayName }}')"
-                                        class="px-3 py-1.5 border border-slate-600 text-slate-300 rounded-lg text-xs font-medium hover:bg-slate-700/50 transition">
-                                        CM
+                                    <button onclick="openInfoModal(
+                                        {{ json_encode($displayName) }},
+                                        {{ json_encode($model['model_id']) }},
+                                        {{ json_encode($cmUrl) }},
+                                        {{ json_encode($historyUrl) }},
+                                        {{ $model['has_confusion_matrix'] ? 'true' : 'false' }},
+                                        {{ $model['has_history'] ? 'true' : 'false' }},
+                                        {{ $model['has_classification_report'] ? 'true' : 'false' }},
+                                        {{ json_encode($datasetName) }},
+                                        {{ json_encode($epochsVal) }},
+                                        {{ json_encode($valSplitVal !== null ? ($valSplitVal * 100) . '%' : '-') }},
+                                        {{ json_encode($batchSizeVal) }},
+                                        {{ json_encode($imageSizeVal) }},
+                                        {{ json_encode($lrVal) }}
+                                    )"
+                                        class="px-3 py-1.5 bg-gradient-to-r from-indigo-500 to-sky-500 text-white rounded-lg text-xs font-medium hover:shadow-md transition">
+                                        Info
                                     </button>
-                                    @endif
-                                    @if($model['has_history'])
-                                    <button onclick="openHistoryModal('{{ $historyUrl }}', '{{ $displayName }}')"
-                                        class="px-3 py-1.5 border border-slate-600 text-slate-300 rounded-lg text-xs font-medium hover:bg-slate-700/50 transition">
-                                        History
-                                    </button>
-                                    @endif
-                                    @if($model['has_classification_report'])
-                                    <button onclick="openReportModal('{{ $model['model_id'] }}', '{{ $displayName }}')"
-                                        class="px-3 py-1.5 border border-slate-600 text-slate-300 rounded-lg text-xs font-medium hover:bg-slate-700/50 transition">
-                                        Report
-                                    </button>
-                                    @endif
                                     <button onclick="openEditModal('{{ $model['model_id'] }}', '{{ addslashes($model['local_name'] ?? '') }}', '{{ addslashes($model['local_notes'] ?? '') }}')"
                                         class="p-1.5 text-indigo-400 hover:bg-indigo-900/20 rounded-lg transition" title="Edit">
                                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -169,93 +176,114 @@
     </div>
 </div>
 
-{{-- CM Modal --}}
-<div id="cm-modal" class="fixed inset-0 z-50 hidden" aria-modal="true">
-    <div class="absolute inset-0 bg-black/60 backdrop-blur-sm" onclick="closeCmModal()"></div>
+{{-- Info Modal --}}
+<div id="info-modal" class="fixed inset-0 z-50 hidden" aria-modal="true">
+    <div class="absolute inset-0 bg-black/60 backdrop-blur-sm" onclick="closeInfoModal()"></div>
     <div class="relative min-h-screen flex items-center justify-center p-4">
-        <div class="bg-slate-800 rounded-2xl shadow-2xl max-w-3xl w-full max-h-[90vh] overflow-y-auto">
-            <div class="flex items-center justify-between p-5 border-b border-slate-700">
+        <div class="bg-slate-800 rounded-2xl shadow-2xl max-w-5xl w-full max-h-[90vh] overflow-y-auto">
+            <div class="flex items-center justify-between p-5 border-b border-slate-700 sticky top-0 bg-slate-800 z-10">
                 <h3 class="text-lg font-semibold text-white">
-                    Confusion Matrix — <span id="cm-title" class="text-indigo-400"></span>
+                    Model Info — <span id="info-title" class="text-indigo-400"></span>
                 </h3>
-                <button onclick="closeCmModal()" class="p-1 text-slate-500 hover:text-slate-300 transition">
+                <button onclick="closeInfoModal()" class="p-1 text-slate-500 hover:text-slate-300 transition">
                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
                     </svg>
                 </button>
             </div>
-            <div class="p-6 bg-slate-900/30">
-                <div id="cm-loading" class="text-center py-10">
-                    <div class="animate-spin w-10 h-10 border-4 border-indigo-500 border-t-transparent rounded-full mx-auto mb-3"></div>
-                    <p class="text-slate-500 text-sm">Loading confusion matrix...</p>
-                </div>
-                <img id="cm-image" src="" alt="Confusion Matrix" class="max-h-[60vh] w-auto mx-auto hidden rounded-lg shadow-md">
-                <div id="cm-analysis" class="hidden mt-6 space-y-3 text-sm"></div>
-            </div>
-        </div>
-    </div>
-</div>
+            <div class="p-6 space-y-6">
 
-{{-- History Modal --}}
-<div id="history-modal" class="fixed inset-0 z-50 hidden" aria-modal="true">
-    <div class="absolute inset-0 bg-black/60 backdrop-blur-sm" onclick="closeHistoryModal()"></div>
-    <div class="relative min-h-screen flex items-center justify-center p-4">
-        <div class="bg-slate-800 rounded-2xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
-            <div class="flex items-center justify-between p-5 border-b border-slate-700">
-                <h3 class="text-lg font-semibold text-white">
-                    Training History — <span id="history-title" class="text-indigo-400"></span>
-                </h3>
-                <button onclick="closeHistoryModal()" class="p-1 text-slate-500 hover:text-slate-300 transition">
-                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-                    </svg>
-                </button>
-            </div>
-            <div class="p-6 bg-slate-900/30">
-                <div id="history-loading" class="text-center py-10">
-                    <div class="animate-spin w-10 h-10 border-4 border-indigo-500 border-t-transparent rounded-full mx-auto mb-3"></div>
-                    <p class="text-slate-500 text-sm">Loading training history...</p>
+                {{-- Training Parameters --}}
+                <div class="bg-slate-900/40 border border-slate-700/50 rounded-xl p-5">
+                    <h4 class="text-sm font-semibold text-white mb-4 flex items-center gap-2">
+                        <svg class="w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                        </svg>
+                        Training Parameters
+                    </h4>
+                    <div class="grid grid-cols-2 md:grid-cols-3 gap-4">
+                        <div>
+                            <p class="text-xs text-slate-500 uppercase tracking-wide mb-1">Dataset File</p>
+                            <p class="text-sm text-slate-200 font-mono" id="info-dataset">-</p>
+                        </div>
+                        <div>
+                            <p class="text-xs text-slate-500 uppercase tracking-wide mb-1">Epochs</p>
+                            <p class="text-sm text-slate-200 font-mono" id="info-epochs">-</p>
+                        </div>
+                        <div>
+                            <p class="text-xs text-slate-500 uppercase tracking-wide mb-1">Validation Split</p>
+                            <p class="text-sm text-slate-200 font-mono" id="info-split">-</p>
+                        </div>
+                        <div>
+                            <p class="text-xs text-slate-500 uppercase tracking-wide mb-1">Batch Size</p>
+                            <p class="text-sm text-slate-200 font-mono" id="info-batch">-</p>
+                        </div>
+                        <div>
+                            <p class="text-xs text-slate-500 uppercase tracking-wide mb-1">Image Size (px)</p>
+                            <p class="text-sm text-slate-200 font-mono" id="info-image">-</p>
+                        </div>
+                        <div>
+                            <p class="text-xs text-slate-500 uppercase tracking-wide mb-1">Learning Rate</p>
+                            <p class="text-sm text-slate-200 font-mono" id="info-lr">-</p>
+                        </div>
+                    </div>
                 </div>
-                <img id="history-image" src="" alt="Training History" class="max-h-[70vh] w-auto mx-auto hidden rounded-lg shadow-md">
-            </div>
-        </div>
-    </div>
-</div>
 
-{{-- Classification Report Modal --}}
-<div id="report-modal" class="fixed inset-0 z-50 hidden" aria-modal="true">
-    <div class="absolute inset-0 bg-black/60 backdrop-blur-sm" onclick="closeReportModal()"></div>
-    <div class="relative min-h-screen flex items-center justify-center p-4">
-        <div class="bg-slate-800 rounded-2xl shadow-2xl max-w-3xl w-full max-h-[90vh] overflow-y-auto">
-            <div class="flex items-center justify-between p-5 border-b border-slate-700">
-                <h3 class="text-lg font-semibold text-white">
-                    Classification Report — <span id="report-title" class="text-indigo-400"></span>
-                </h3>
-                <button onclick="closeReportModal()" class="p-1 text-slate-500 hover:text-slate-300 transition">
-                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-                    </svg>
-                </button>
-            </div>
-            <div class="p-6">
-                <div id="report-loading" class="text-center py-10">
-                    <div class="animate-spin w-10 h-10 border-4 border-indigo-500 border-t-transparent rounded-full mx-auto mb-3"></div>
-                    <p class="text-slate-500 text-sm">Loading classification report...</p>
+                {{-- Tab Navigation --}}
+                <div class="border-b border-slate-700">
+                    <nav class="flex gap-6 -mb-px">
+                        <button onclick="switchInfoTab('cm', this)" class="info-tab text-sm font-medium pb-3 border-b-2 border-indigo-400 text-indigo-300 transition" data-tab="cm">Confusion Matrix</button>
+                        <button onclick="switchInfoTab('history', this)" class="info-tab text-sm font-medium pb-3 border-b-2 border-transparent text-slate-400 hover:text-slate-200 transition" data-tab="history">Training History</button>
+                        <button onclick="switchInfoTab('report', this)" class="info-tab text-sm font-medium pb-3 border-b-2 border-transparent text-slate-400 hover:text-slate-200 transition" data-tab="report">Classification Report</button>
+                    </nav>
                 </div>
-                <div id="report-content" class="hidden overflow-x-auto">
-                    <table class="w-full text-sm">
-                        <thead>
-                            <tr class="border-b border-slate-700 text-left text-xs text-slate-400 uppercase tracking-wide">
-                                <th class="py-3 pr-4">Class</th>
-                                <th class="py-3 pr-4 text-right">Precision</th>
-                                <th class="py-3 pr-4 text-right">Recall</th>
-                                <th class="py-3 pr-4 text-right">F1-Score</th>
-                                <th class="py-3 pr-4 text-right">Support</th>
-                            </tr>
-                        </thead>
-                        <tbody id="report-tbody"></tbody>
-                    </table>
+
+                {{-- Tab Content: CM --}}
+                <div id="info-tab-cm" class="info-tab-content">
+                    <div id="cm-loading" class="text-center py-10 hidden">
+                        <div class="animate-spin w-10 h-10 border-4 border-indigo-500 border-t-transparent rounded-full mx-auto mb-3"></div>
+                        <p class="text-slate-500 text-sm">Loading confusion matrix...</p>
+                    </div>
+                    <img id="cm-image" src="" alt="Confusion Matrix" class="max-h-[55vh] w-auto mx-auto hidden rounded-lg shadow-md">
+                    <div id="cm-unavailable" class="text-center py-10 text-slate-500 text-sm hidden">Confusion matrix not available for this model.</div>
+                    <div id="cm-analysis" class="hidden mt-6 space-y-3 text-sm"></div>
                 </div>
+
+                {{-- Tab Content: History --}}
+                <div id="info-tab-history" class="info-tab-content hidden">
+                    <div id="history-loading" class="text-center py-10 hidden">
+                        <div class="animate-spin w-10 h-10 border-4 border-indigo-500 border-t-transparent rounded-full mx-auto mb-3"></div>
+                        <p class="text-slate-500 text-sm">Loading training history...</p>
+                    </div>
+                    <img id="history-image" src="" alt="Training History" class="max-h-[65vh] w-auto mx-auto hidden rounded-lg shadow-md">
+                    <div id="history-summary" class="hidden mt-4 bg-slate-900/40 border border-slate-700/50 rounded-xl p-4 space-y-2 text-xs md:text-sm"></div>
+                    <div id="history-unavailable" class="text-center py-10 text-slate-500 text-sm hidden">Training history not available for this model.</div>
+                </div>
+
+                {{-- Tab Content: Report --}}
+                <div id="info-tab-report" class="info-tab-content hidden">
+                    <div id="report-loading" class="text-center py-10 hidden">
+                        <div class="animate-spin w-10 h-10 border-4 border-indigo-500 border-t-transparent rounded-full mx-auto mb-3"></div>
+                        <p class="text-slate-500 text-sm">Loading classification report...</p>
+                    </div>
+                    <div id="report-content" class="hidden overflow-x-auto">
+                        <table class="w-full text-sm">
+                            <thead>
+                                <tr class="border-b border-slate-700 text-left text-xs text-slate-400 uppercase tracking-wide">
+                                    <th class="py-3 pr-4">Class</th>
+                                    <th class="py-3 pr-4 text-right">Precision</th>
+                                    <th class="py-3 pr-4 text-right">Recall</th>
+                                    <th class="py-3 pr-4 text-right">F1-Score</th>
+                                    <th class="py-3 pr-4 text-right">Support</th>
+                                </tr>
+                            </thead>
+                            <tbody id="report-tbody"></tbody>
+                        </table>
+                    </div>
+                    <div id="report-unavailable" class="text-center py-10 text-slate-500 text-sm hidden">Classification report not available for this model.</div>
+                </div>
+
             </div>
         </div>
     </div>
@@ -431,46 +459,156 @@ document.getElementById('next-page').addEventListener('click', function() {
 // Init
 filterAndPaginate();
 
-// ===== CM Modal =====
-function openCmModal(url, title) {
-    document.getElementById('cm-title').textContent = title;
-    document.getElementById('cm-image').classList.add('hidden');
+// ===== Info Modal =====
+var _infoModelId = null;
+
+function openInfoModal(name, modelId, cmUrl, historyUrl, hasCm, hasHistory, hasReport, dataset, epochs, split, batch, image, lr) {
+    _infoModelId = modelId;
+    document.getElementById('info-title').textContent = name;
+
+    // Fill training parameters
+    document.getElementById('info-dataset').textContent = dataset;
+    document.getElementById('info-epochs').textContent = epochs;
+    document.getElementById('info-split').textContent = split;
+    document.getElementById('info-batch').textContent = batch;
+    document.getElementById('info-image').textContent = image;
+    document.getElementById('info-lr').textContent = lr;
+
+    // Reset tabs
+    document.querySelectorAll('.info-tab-content').forEach(function(el) { el.classList.add('hidden'); });
+    document.querySelectorAll('.info-tab').forEach(function(el) {
+        el.classList.remove('border-indigo-400', 'text-indigo-300');
+        el.classList.add('border-transparent', 'text-slate-400');
+    });
+
+    // Show first available tab
+    var firstTab = document.querySelector('.info-tab');
+    if (firstTab) {
+        firstTab.click();
+    }
+
+    document.getElementById('info-modal').classList.remove('hidden');
+
+    // Prepare CM tab
+    var cmImg = document.getElementById('cm-image');
+    cmImg.classList.add('hidden');
+    document.getElementById('cm-loading').classList.add('hidden');
+    document.getElementById('cm-unavailable').classList.add('hidden');
     document.getElementById('cm-analysis').classList.add('hidden');
     document.getElementById('cm-analysis').innerHTML = '';
-    document.getElementById('cm-loading').classList.remove('hidden');
-    document.getElementById('cm-modal').classList.remove('hidden');
 
-    var img = document.getElementById('cm-image');
-    img.onload = function() {
-        document.getElementById('cm-loading').classList.add('hidden');
-        img.classList.remove('hidden');
-    };
-    img.onerror = function() {
-        document.getElementById('cm-loading').innerHTML =
-            '<p class="text-red-500 text-sm">Failed to load Confusion Matrix.</p>';
-    };
-    img.src = url;
+    if (hasCm) {
+        document.getElementById('cm-loading').classList.remove('hidden');
+        cmImg.onload = function() {
+            document.getElementById('cm-loading').classList.add('hidden');
+            cmImg.classList.remove('hidden');
+        };
+        cmImg.onerror = function() {
+            document.getElementById('cm-loading').classList.add('hidden');
+            document.getElementById('cm-unavailable').classList.remove('hidden');
+        };
+        cmImg.src = cmUrl;
 
-    // Fetch raw CM data for dynamic analysis
-    var dataUrl = url.replace('/files/confusion_matrix/', '/files/confusion_matrix_data/');
-    var xhr = new XMLHttpRequest();
-    xhr.open('GET', dataUrl);
-    xhr.onload = function() {
-        if (xhr.status < 200 || xhr.status >= 300) return;
-        try {
-            var data = JSON.parse(xhr.responseText);
-            renderCmAnalysis(data.matrix, data.class_names);
-        } catch (_) {}
-    };
-    xhr.send();
+        var dataUrl = cmUrl.replace('/files/confusion_matrix/', '/files/confusion_matrix_data/');
+        var xhr = new XMLHttpRequest();
+        xhr.open('GET', dataUrl);
+        xhr.onload = function() {
+            if (xhr.status < 200 || xhr.status >= 300) return;
+            try {
+                var data = JSON.parse(xhr.responseText);
+                renderInfoCmAnalysis(data.matrix, data.class_names);
+            } catch (_) {}
+        };
+        xhr.send();
+    } else {
+        document.getElementById('cm-unavailable').classList.remove('hidden');
+    }
+
+    // Prepare History tab
+    var histImg = document.getElementById('history-image');
+    histImg.classList.add('hidden');
+    document.getElementById('history-loading').classList.add('hidden');
+    document.getElementById('history-summary').classList.add('hidden');
+    document.getElementById('history-summary').innerHTML = '';
+    document.getElementById('history-unavailable').classList.add('hidden');
+
+    if (hasHistory) {
+        document.getElementById('history-loading').classList.remove('hidden');
+        histImg.onload = function() {
+            document.getElementById('history-loading').classList.add('hidden');
+            histImg.classList.remove('hidden');
+        };
+        histImg.onerror = function() {
+            document.getElementById('history-loading').classList.add('hidden');
+            document.getElementById('history-unavailable').classList.remove('hidden');
+        };
+        histImg.src = historyUrl;
+
+        // Fetch raw history JSON for dynamic summary
+        var histDataUrl = aiServiceUrl + '/files/training_history_data/' + modelId;
+        var histXhr = new XMLHttpRequest();
+        histXhr.open('GET', histDataUrl);
+        histXhr.onload = function() {
+            if (histXhr.status >= 200 && histXhr.status < 300) {
+                try {
+                    var histData = JSON.parse(histXhr.responseText);
+                    renderHistorySummary(histData);
+                } catch (_) {}
+            }
+        };
+        histXhr.send();
+    } else {
+        document.getElementById('history-unavailable').classList.remove('hidden');
+    }
+
+    // Prepare Report tab
+    document.getElementById('report-content').classList.add('hidden');
+    document.getElementById('report-loading').classList.add('hidden');
+    document.getElementById('report-unavailable').classList.add('hidden');
+
+    if (hasReport) {
+        document.getElementById('report-loading').classList.remove('hidden');
+        var repXhr = new XMLHttpRequest();
+        repXhr.open('GET', aiServiceUrl + '/files/classification_report_data/' + modelId);
+        repXhr.onload = function() {
+            document.getElementById('report-loading').classList.add('hidden');
+            if (repXhr.status >= 200 && repXhr.status < 300) {
+                try {
+                    var repData = JSON.parse(repXhr.responseText);
+                    renderInfoReportTable(repData);
+                } catch (_) {
+                    document.getElementById('report-unavailable').classList.remove('hidden');
+                }
+            } else {
+                document.getElementById('report-unavailable').classList.remove('hidden');
+            }
+        };
+        repXhr.onerror = function() {
+            document.getElementById('report-loading').classList.add('hidden');
+            document.getElementById('report-unavailable').classList.remove('hidden');
+        };
+        repXhr.send();
+    } else {
+        document.getElementById('report-unavailable').classList.remove('hidden');
+    }
 }
 
-function renderCmAnalysis(matrix, classNames) {
+function switchInfoTab(tabId, btn) {
+    document.querySelectorAll('.info-tab-content').forEach(function(el) { el.classList.add('hidden'); });
+    document.querySelectorAll('.info-tab').forEach(function(el) {
+        el.classList.remove('border-indigo-400', 'text-indigo-300');
+        el.classList.add('border-transparent', 'text-slate-400');
+    });
+    document.getElementById('info-tab-' + tabId).classList.remove('hidden');
+    btn.classList.remove('border-transparent', 'text-slate-400');
+    btn.classList.add('border-indigo-400', 'text-indigo-300');
+}
+
+function renderInfoCmAnalysis(matrix, classNames) {
     var n = classNames.length;
     var totalGlobal = 0;
     var correctGlobal = 0;
     var rows = [];
-
     for (var i = 0; i < n; i++) {
         var tp = matrix[i][i];
         var rowTotal = 0;
@@ -480,21 +618,14 @@ function renderCmAnalysis(matrix, classNames) {
         var pct = rowTotal > 0 ? ((tp / rowTotal) * 100).toFixed(1) : '0.0';
         rows.push({ label: classNames[i], tp: tp, total: rowTotal, pct: pct });
     }
-
     var globalAcc = totalGlobal > 0 ? ((correctGlobal / totalGlobal) * 100).toFixed(1) : '0.0';
-
     var html = '<div class="bg-slate-800/60 border border-slate-700/50 rounded-xl p-4 space-y-3">';
-
-    html += '<h4 class="text-sm font-semibold text-white mb-2">📊 Analisis Confusion Matrix</h4>';
-
+    html += '<h4 class="text-sm font-semibold text-white mb-2">Analisis Confusion Matrix</h4>';
     html += '<div class="text-xs text-slate-400">Akurasi Global: <span class="text-green-400 font-bold">' + globalAcc + '%</span> (' + correctGlobal + '/' + totalGlobal + ' sampel)</div>';
-
     for (var r = 0; r < rows.length; r++) {
         var row = rows[r];
         html += '<div class="text-xs text-slate-400">Kelas <span class="text-white font-medium">' + row.label + '</span>: Sensitivitas <span class="text-indigo-300 font-medium">' + row.pct + '%</span> (' + row.tp + ' dari ' + row.total + ' sampel terdeteksi dengan benar).</div>';
     }
-
-    // Check for concerning misclassifications
     var warnings = [];
     for (var i = 0; i < n; i++) {
         for (var j = 0; j < n; j++) {
@@ -504,99 +635,32 @@ function renderCmAnalysis(matrix, classNames) {
             if (rowTotal > 0) {
                 var misPct = (matrix[i][j] / rowTotal) * 100;
                 if (misPct > 5) {
-                    warnings.push(classNames[i] + ' → ' + classNames[j] + ' (' + misPct.toFixed(1) + '%)');
+                    warnings.push(classNames[i] + ' -> ' + classNames[j] + ' (' + misPct.toFixed(1) + '%)');
                 }
             }
         }
     }
-
     if (warnings.length > 0) {
         html += '<div class="mt-3 p-3 bg-amber-900/30 border border-amber-700/50 rounded-lg">';
-        html += '<p class="text-amber-300 text-xs font-semibold mb-1">⚠️ Rekomendasi Optimasi</p>';
+        html += '<p class="text-amber-300 text-xs font-semibold mb-1">Rekomendasi Optimasi</p>';
         html += '<p class="text-amber-400 text-xs">Misklasifikasi cukup tinggi pada:</p><ul class="list-disc list-inside text-amber-400 text-xs mt-1">';
         for (var w = 0; w < warnings.length; w++) {
-            html += '<li>' + warnings[w] + ' — pertimbangkan menambah data latih untuk kelas ini.</li>';
+            html += '<li>' + warnings[w] + ' - pertimbangkan menambah data latih untuk kelas ini.</li>';
         }
         html += '</ul></div>';
     }
-
     html += '</div>';
-
     var el = document.getElementById('cm-analysis');
     el.innerHTML = html;
     el.classList.remove('hidden');
 }
 
-function closeCmModal() {
-    document.getElementById('cm-modal').classList.add('hidden');
-    document.getElementById('cm-image').classList.add('hidden');
-    document.getElementById('cm-analysis').classList.add('hidden');
-    document.getElementById('cm-analysis').innerHTML = '';
-}
-
-// ===== History Modal =====
-function openHistoryModal(url, title) {
-    document.getElementById('history-title').textContent = title;
-    document.getElementById('history-image').classList.add('hidden');
-    document.getElementById('history-loading').classList.remove('hidden');
-    document.getElementById('history-modal').classList.remove('hidden');
-
-    var img = document.getElementById('history-image');
-    img.onload = function() {
-        document.getElementById('history-loading').classList.add('hidden');
-        img.classList.remove('hidden');
-    };
-    img.onerror = function() {
-        document.getElementById('history-loading').innerHTML =
-            '<p class="text-red-500 text-sm">Failed to load training history.</p>';
-    };
-    img.src = url;
-}
-
-function closeHistoryModal() {
-    document.getElementById('history-modal').classList.add('hidden');
-    document.getElementById('history-image').classList.add('hidden');
-}
-
-// ===== Report Modal =====
-function openReportModal(modelId, title) {
-    document.getElementById('report-title').textContent = title;
-    document.getElementById('report-content').classList.add('hidden');
-    document.getElementById('report-loading').classList.remove('hidden');
-    document.getElementById('report-modal').classList.remove('hidden');
-
-    var xhr = new XMLHttpRequest();
-    xhr.open('GET', aiServiceUrl + '/files/classification_report_data/' + modelId);
-    xhr.onload = function() {
-        document.getElementById('report-loading').classList.add('hidden');
-        if (xhr.status >= 200 && xhr.status < 300) {
-            try {
-                var data = JSON.parse(xhr.responseText);
-                renderReportTable(data);
-            } catch (_) {
-                document.getElementById('report-content').innerHTML = '<p class="text-red-500 text-sm">Invalid report data.</p>';
-                document.getElementById('report-content').classList.remove('hidden');
-            }
-        } else {
-            document.getElementById('report-content').innerHTML = '<p class="text-red-500 text-sm">Failed to load report.</p>';
-            document.getElementById('report-content').classList.remove('hidden');
-        }
-    };
-    xhr.onerror = function() {
-        document.getElementById('report-loading').classList.add('hidden');
-        document.getElementById('report-content').innerHTML = '<p class="text-red-500 text-sm">Connection lost.</p>';
-        document.getElementById('report-content').classList.remove('hidden');
-    };
-    xhr.send();
-}
-
-function renderReportTable(data) {
+function renderInfoReportTable(data) {
     var tbody = document.getElementById('report-tbody');
     var html = '';
     var orderedKeys = Object.keys(data).filter(function(k) {
         return k !== 'accuracy' && !k.startsWith('macro ') && !k.startsWith('weighted ');
     });
-
     orderedKeys.forEach(function(cls) {
         var m = data[cls];
         html += '<tr class="border-b border-slate-700/50">';
@@ -607,8 +671,6 @@ function renderReportTable(data) {
         html += '<td class="py-3 pr-4 text-right text-sm font-mono text-slate-400">' + (m.support !== undefined ? m.support : '-') + '</td>';
         html += '</tr>';
     });
-
-    // Macro avg row
     if (data['macro avg']) {
         var ma = data['macro avg'];
         html += '<tr class="bg-indigo-900/20 border-t-2 border-indigo-700">';
@@ -619,22 +681,120 @@ function renderReportTable(data) {
         html += '<td class="py-3 pr-4 text-right text-sm font-mono text-slate-400">' + (ma.support !== undefined ? ma.support : '-') + '</td>';
         html += '</tr>';
     }
-
-    // Overall accuracy row
     if (data.accuracy !== undefined) {
         html += '<tr class="bg-green-900/20 border-t-2 border-green-700">';
         html += '<td class="py-3 pr-4 text-sm font-semibold text-green-400">Accuracy</td>';
         html += '<td class="py-3 pr-4 text-right text-sm font-mono font-semibold text-white" colspan="4">' + (data.accuracy * 100).toFixed(1) + '%</td>';
         html += '</tr>';
     }
-
     tbody.innerHTML = html;
     document.getElementById('report-content').classList.remove('hidden');
 }
 
-function closeReportModal() {
-    document.getElementById('report-modal').classList.add('hidden');
-    document.getElementById('report-content').classList.add('hidden');
+function renderHistorySummary(data) {
+    var acc = data.accuracy || [];
+    var valAcc = data.val_accuracy || [];
+    var loss = data.loss || [];
+    var valLoss = data.val_loss || [];
+    var totalEpochs = acc.length;
+
+    if (totalEpochs === 0) {
+        document.getElementById('history-summary').classList.add('hidden');
+        return;
+    }
+
+    // Best training accuracy
+    var bestAcc = -Infinity;
+    var bestAccEpoch = 0;
+    for (var i = 0; i < acc.length; i++) {
+        if (acc[i] > bestAcc) {
+            bestAcc = acc[i];
+            bestAccEpoch = i + 1;
+        }
+    }
+
+    // Best validation accuracy
+    var bestValAcc = -Infinity;
+    var bestValAccEpoch = 0;
+    for (var i = 0; i < valAcc.length; i++) {
+        if (valAcc[i] > bestValAcc) {
+            bestValAcc = valAcc[i];
+            bestValAccEpoch = i + 1;
+        }
+    }
+
+    // Final loss values
+    var finalTrainLoss = loss.length > 0 ? loss[loss.length - 1] : null;
+    var finalValLoss = valLoss.length > 0 ? valLoss[valLoss.length - 1] : null;
+
+    // Overfitting check: if val_loss > train_loss by more than 20%
+    var isOverfitting = false;
+    var overfittingMsg = '';
+    if (finalTrainLoss !== null && finalValLoss !== null && finalTrainLoss > 0) {
+        var ratio = (finalValLoss - finalTrainLoss) / finalTrainLoss;
+        if (ratio > 0.2) {
+            isOverfitting = true;
+            overfittingMsg = 'Val loss ' + (ratio * 100).toFixed(0) + '% lebih tinggi dari train loss. Model mungkin overfit. Pertimbangkan menambah data atau memperkuat regularisasi.';
+        }
+    }
+
+    // Build summary HTML
+    var html = '<div class="space-y-2">';
+
+    html += '<h4 class="text-sm font-semibold text-white flex items-center gap-2">';
+    html += '<svg class="w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>';
+    html += 'Dynamic Chart Summary</h4>';
+
+    html += '<div class="grid grid-cols-2 gap-3 pt-1">';
+
+    // Total epochs
+    html += '<div class="bg-slate-800/40 rounded-lg p-3">';
+    html += '<p class="text-xs text-slate-500 uppercase tracking-wide">Total Epochs</p>';
+    html += '<p class="text-lg font-bold text-white">' + totalEpochs + '</p>';
+    html += '</div>';
+
+    // Best training accuracy
+    html += '<div class="bg-slate-800/40 rounded-lg p-3">';
+    html += '<p class="text-xs text-slate-500 uppercase tracking-wide">Best Train Accuracy</p>';
+    html += '<p class="text-lg font-bold text-green-400">' + (bestAcc * 100).toFixed(1) + '%</p>';
+    html += '<p class="text-xs text-slate-500">Epoch ' + bestAccEpoch + '</p>';
+    html += '</div>';
+
+    // Best validation accuracy
+    html += '<div class="bg-slate-800/40 rounded-lg p-3">';
+    html += '<p class="text-xs text-slate-500 uppercase tracking-wide">Best Val Accuracy</p>';
+    html += '<p class="text-lg font-bold text-indigo-400">' + (bestValAcc * 100).toFixed(1) + '%</p>';
+    html += '<p class="text-xs text-slate-500">Epoch ' + bestValAccEpoch + '</p>';
+    html += '</div>';
+
+    // Final loss state
+    html += '<div class="bg-slate-800/40 rounded-lg p-3">';
+    html += '<p class="text-xs text-slate-500 uppercase tracking-wide">Final Loss</p>';
+    html += '<p class="text-sm font-mono text-slate-300">Train: ' + (finalTrainLoss !== null ? finalTrainLoss.toFixed(4) : '-') + '</p>';
+    html += '<p class="text-sm font-mono text-slate-300">Val: ' + (finalValLoss !== null ? finalValLoss.toFixed(4) : '-') + '</p>';
+    html += '</div>';
+
+    html += '</div>';
+
+    if (isOverfitting) {
+        html += '<div class="mt-2 p-3 bg-amber-900/30 border border-amber-700/50 rounded-lg flex items-start gap-2">';
+        html += '<svg class="w-4 h-4 text-amber-400 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>';
+        html += '<p class="text-amber-400 text-xs">' + overfittingMsg + '</p>';
+        html += '</div>';
+    }
+
+    html += '</div>';
+
+    var el = document.getElementById('history-summary');
+    el.innerHTML = html;
+    el.classList.remove('hidden');
+}
+
+function closeInfoModal() {
+    document.getElementById('info-modal').classList.add('hidden');
+    document.getElementById('history-summary').classList.add('hidden');
+    document.getElementById('history-summary').innerHTML = '';
+    _infoModelId = null;
 }
 
 // ===== Edit Modal =====
@@ -748,15 +908,11 @@ function closeCreateModal() {
 
 // ===== Click outside modals =====
 document.addEventListener('click', function(e) {
-    var cm = document.getElementById('cm-modal');
-    var history = document.getElementById('history-modal');
-    var report = document.getElementById('report-modal');
+    var info = document.getElementById('info-modal');
     var edit = document.getElementById('edit-modal');
     var create = document.getElementById('create-modal');
 
-    if (e.target === cm) closeCmModal();
-    if (e.target === history) closeHistoryModal();
-    if (e.target === report) closeReportModal();
+    if (e.target === info) closeInfoModal();
     if (e.target === edit) closeEditModal();
     if (e.target === create) closeCreateModal();
 });

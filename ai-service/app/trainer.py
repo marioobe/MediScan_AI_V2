@@ -330,6 +330,10 @@ def _run_training(job_id, dataset_path, classes, cfg):
         with open(metrics_path, "w") as f:
             json.dump(metrics_dict, f, indent=2)
 
+        config_path = os.path.join(MODELS_DIR, f"config_{model_id}.json")
+        with open(config_path, "w") as f:
+            json.dump(cfg, f, indent=2)
+
         cm_filename = f"confusion_matrix_{model_id}.png"
         cm_path = os.path.join(MODELS_DIR, cm_filename)
         _generate_confusion_matrix(model, val_gen, class_names, cm_path)
@@ -356,6 +360,7 @@ def _run_training(job_id, dataset_path, classes, cfg):
             confusion_matrix_path=cm_filename,
             classification_report_path=report_filename,
             metrics_path=metrics_path,
+            config_path=config_path,
         )
         _log(job_id, "Training selesai!")
         try:
@@ -424,9 +429,12 @@ def _generate_classification_report(model, val_gen, class_names, save_path):
     with open(save_path, "w") as f:
         json.dump(report, f, indent=2)
 
-def start_training(zip_path, epochs=10, validation_split=0.3, batch_size=32, image_size=224, learning_rate=0.0001):
+def start_training(zip_path, epochs=10, validation_split=0.3, batch_size=32, image_size=224, learning_rate=0.0001, dataset_filename=None):
     job_id = str(uuid.uuid4())
     dataset_dir = os.path.join(DATASETS_DIR, job_id)
+    if not dataset_filename:
+        zip_basename = os.path.basename(zip_path)
+        dataset_filename = zip_basename.split('_', 1)[1] if '_' in zip_basename else zip_basename
     jobs[job_id] = {
         "id": job_id,
         "status": "pending",
@@ -447,9 +455,11 @@ def start_training(zip_path, epochs=10, validation_split=0.3, batch_size=32, ima
         "confusion_matrix_path": None,
         "classification_report_path": None,
         "metrics_path": None,
+        "config_path": None,
         "epochs": [],
         "cancel_requested": False,
         "config": {
+            "dataset_filename": dataset_filename,
             "epochs": epochs,
             "validation_split": validation_split,
             "batch_size": batch_size,
