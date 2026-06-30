@@ -34,6 +34,9 @@ from app.config import (
 
 
 class SparseFocalLoss(tf.keras.losses.Loss):
+    # SparseFocalLoss: Custom loss untuk class imbalance
+    # gamma=2.0 -> Semakin yakin model, semakin kecil loss-nya (fokus ke sampel sulit)
+    # alpha=0.25 -> Bobot prioritas ke kelas minoritas (malignant prioritas klinis)
     def __init__(self, gamma=2.0, alpha=0.25, from_logits=False, **kwargs):
         super().__init__(**kwargs)
         self.gamma = gamma
@@ -46,9 +49,13 @@ class SparseFocalLoss(tf.keras.losses.Loss):
             y_pred = tf.nn.softmax(y_pred, axis=-1)
         y_pred = tf.clip_by_value(y_pred, epsilon, 1.0 - epsilon)
         y_true = tf.cast(y_true, tf.int32)
+        # Ubah y_true (integer) ke one-hot encoding agar bisa dikalikan dengan y_pred
         y_true_one_hot = tf.one_hot(y_true, tf.shape(y_pred)[-1])
+        # CrossEntropy standar: -y_true * log(y_pred)
         cross_entropy = -y_true_one_hot * tf.math.log(y_pred)
+        # Focal weight: (1 - y_pred)^gamma -> kecil jika y_pred mendekati 1 (mudah), besar jika y_pred kecil (sulit)
         focal_weight = tf.pow(1.0 - y_pred, self.gamma) * y_true_one_hot
+        # Alpha mengalikan bobot prioritas ke kelas tertentu (malignant)
         focal_loss = self.alpha * focal_weight * cross_entropy
         return tf.reduce_sum(focal_loss, axis=-1)
 
@@ -147,20 +154,25 @@ def _validate_dataset(job_id, dataset_path):
     return classes, class_counts
 
 class ProgressCallback(tf.keras.callbacks.Callback):
+    # Callback untuk memonitor progress training tiap epoch
+    # epoch_offset: digunakan di Fase 2 agar nomor epoch lanjutan dari Fase 1
     def __init__(self, job_id, epoch_offset=0):
         super().__init__()
         self.job_id = job_id
         self.epoch_offset = epoch_offset
 
     def on_epoch_end(self, epoch, logs=None):
+        # Cek apakah user membatalkan training
         job = jobs.get(self.job_id)
         if job and job.get("cancel_requested"):
             self.model.stop_training = True
             _log(self.job_id, "Training cancelled by user.")
             return
         logs = logs or {}
+        # Hitung nomor epoch display (disesuaikan dengan offset jika Fase 2)
         display_epoch = epoch + 1 + self.epoch_offset
         _update_job(self.job_id, current_epoch=display_epoch)
+        # Catat akurasi dan loss (train + validation) untuk history chart
         ep = {
             "epoch": display_epoch,
             "accuracy": float(logs.get("accuracy", 0)),
@@ -176,6 +188,10 @@ class ProgressCallback(tf.keras.callbacks.Callback):
              f"loss={ep['loss']:.4f} | val_loss={ep['val_loss']:.4f}")
 
 def _evaluate_metrics(model, val_gen, class_names):
+    # Evaluasi model setelah training selesai
+    # Menghitung accuracy, precision, recall, f1-score dengan macro averaging
+    # Macro average = rata-rata per kelas tanpa mempertimbangkan jumlah sampel
+    # Cocok untuk dataset tidak seimbang karena tiap kelas berbobot sama
     val_gen.reset()
     y_true = val_gen.classes
     y_pred = model.predict(val_gen, verbose=0)
@@ -192,6 +208,9 @@ def _evaluate_metrics(model, val_gen, class_names):
     }, y_pred_classes
 
 def _compute_class_weights(train_gen, class_names):
+    # Hitung bobot tiap kelas berdasarkan rumus: total / (n_kelas * count_kelas)
+    # Kelas dengan jumlah sampel sedikit (malignant, normal) mendapat bobot lebih besar
+    # Class weights ini digunakan di model.fit() agar model tidak bias ke kelas mayoritas
     class_counts = np.bincount(train_gen.classes)
     total = len(train_gen.classes)
     n_classes = len(class_names)
@@ -218,6 +237,10 @@ def _run_training(job_id, dataset_path, classes, cfg):
             files = [f for f in os.listdir(cls_path) if f.endswith((".jpg", ".jpeg", ".png"))]
             _log(job_id, f"  Kelas '{cls}': {len(files)} gambar")
 
+        # TRAIN DATA GENERATOR: preprocessing + augmentasi
+        # preprocessing_function=preprocess_input: normalisasi piksel sesuai format MobileNetV2
+        # Augmentasi (rotation, shift, zoom, dll) untuk meningkatkan variasi data training
+        # validation_split=val_split: pisahkan 30% data untuk validasi secara otomatis
         train_datagen = ImageDataGenerator(
             preprocessing_function=preprocess_input,
             rotation_range=20,
@@ -230,6 +253,8 @@ def _run_training(job_id, dataset_path, classes, cfg):
             fill_mode="nearest",
             validation_split=val_split
         )
+        # VALIDATION DATA GENERATOR: hanya preprocessing, TANPA augmentasi
+        # Data validasi harus asli (tidak diubah) agar evaluasi akurat
         val_datagen = ImageDataGenerator(
             preprocessing_function=preprocess_input,
             validation_split=val_split
@@ -255,11 +280,16 @@ def _run_training(job_id, dataset_path, classes, cfg):
         _log(job_id, f"Class weights: {class_weight_dict}")
         _log(job_id, " Focal Loss aktif: gamma=2.0, alpha=0.25 — fokus pada kelas malignant.")
 
+        # ========== FASE 1: FROZEN TRAINING ==========
+        # Tujuan: Melatih classifier head dari nol tanpa merusak fitur ImageNet
+        # Base model MobileNetV2 di-freeze (trainable=False), hanya layer Dense yang berubah
         base_model = MobileNetV2(
             weights="imagenet", include_top=False, pooling="avg",
             input_shape=(image_size, image_size, 3)
         )
         base_model.trainable = False
+        # Classifier head: Dense(256) -> Dropout(0.5) -> Dense(128) -> Dropout(0.3) -> Dense(3, softmax)
+        # Dropout mencegah overfitting dengan mematikan neuron secara acak saat training
         x = base_model.output
         x = Dense(256, activation="relu")(x)
         x = tf.keras.layers.Dropout(0.5)(x)
@@ -268,7 +298,7 @@ def _run_training(job_id, dataset_path, classes, cfg):
         outputs = Dense(n_classes, activation="softmax")(x)
         model = Model(inputs=base_model.input, outputs=outputs)
         model.compile(
-            optimizer=Adam(learning_rate=lr),
+            optimizer=Adam(learning_rate=lr),  # lr=1e-4 (default)
             loss=SparseFocalLoss(gamma=2.0, alpha=0.25),
             metrics=["accuracy"]
         )
@@ -277,27 +307,34 @@ def _run_training(job_id, dataset_path, classes, cfg):
         prog_cb = ProgressCallback(job_id)
         history = model.fit(
             train_gen, epochs=epochs, validation_data=val_gen,
-            class_weight=class_weight_dict,
+            class_weight=class_weight_dict,  # Bobot tambahan untuk kelas minoritas
             callbacks=[prog_cb], verbose=0
         )
         total_epochs_done = len(history.history["loss"])
 
+        # ========== FASE 2: FINE-TUNING ==========
+        # Tujuan: Adaptasi fitur layer akhir MobileNetV2 ke domain citra USG
+        # Layer 0-119 tetap dibekukan (fitur dasar: tepi, sudut, tekstur — universal)
+        # Layer 120+ diaktifkan (fitur spesifik domain yang perlu diadaptasi)
+        # Learning rate diturunkan 10x (1e-5) agar fine-tuning tidak merusak bobot (catastrophic forgetting)
         if not jobs.get(job_id, {}).get("cancel_requested"):
             _log(job_id, "Fase 2: fine-tuning (unfreeze layer 120+, lr={:.6f})...".format(lr * 0.1))
             base_model.trainable = True
             for layer in base_model.layers[:120]:
                 layer.trainable = False
             model.compile(
-                optimizer=Adam(learning_rate=lr * 0.1),
+                optimizer=Adam(learning_rate=lr * 0.1),  # lr=1e-5 (10x lebih kecil dari Fase 1)
                 loss=SparseFocalLoss(gamma=2.0, alpha=0.25),
                 metrics=["accuracy"]
             )
+            # epoch_offset = total epoch dari Fase 1 agar nomor epoch tampil berlanjut
             ft_prog_cb = ProgressCallback(job_id, epoch_offset=total_epochs_done)
             history_ft = model.fit(
                 train_gen, epochs=ft_epochs, validation_data=val_gen,
                 class_weight=class_weight_dict,
                 callbacks=[ft_prog_cb], verbose=0
             )
+            # Gabungkan history Fase 2 ke history Fase 1 untuk evaluasi terpadu
             for k, v in history_ft.history.items():
                 history.history.setdefault(k, []).extend(v)
             total_epochs_done += len(history_ft.history["loss"])
@@ -306,37 +343,47 @@ def _run_training(job_id, dataset_path, classes, cfg):
             _update_job(job_id, status="cancelled", progress_percent=0)
             _log(job_id, "Training dibatalkan.")
             return
+        # Ambil akurasi dan loss dari epoch terakhir
         val_acc = history.history["val_accuracy"][-1]
         val_loss = history.history["val_loss"][-1]
         _log(job_id, f"Training selesai: {total_epochs_done} epoch, val_acc={val_acc:.4f}, val_loss={val_loss:.4f}")
 
+        # Evaluasi lengkap: accuracy, precision, recall, f1-score (macro average)
         metrics_dict, y_pred_classes = _evaluate_metrics(model, val_gen, class_names)
         _log(job_id, f"Evaluasi: accuracy={metrics_dict['accuracy']*100:.2f}%, precision={metrics_dict['precision']*100:.2f}%, recall={metrics_dict['recall']*100:.2f}%, f1={metrics_dict['f1_score']*100:.2f}%")
 
+        # ========== PENYIMPANAN MODEL DAN ARTIFAK ==========
+        # Generate model_id unik (8 karakter pertama dari UUID) untuk identifikasi file
         model_id = str(uuid.uuid4())[:8]
         model_filename = f"model_{model_id}.keras"
         model_path = os.path.join(MODELS_DIR, model_filename)
-        model.save(model_path)
+        model.save(model_path)  # Simpan model TensorFlow (.keras)
         _log(job_id, f"Model saved: {model_path}")
 
+        # History training per epoch (akurasi & loss) untuk grafik di halaman Models
         history_path = os.path.join(MODELS_DIR, f"history_{model_id}.json")
         history_serializable = {k: [float(v) for v in vals] for k, vals in history.history.items()}
         with open(history_path, "w") as f:
             json.dump(history_serializable, f)
+        # Nama kelas (benign, malignant, normal) untuk referensi frontend
         class_names_path = os.path.join(MODELS_DIR, f"class_names_{model_id}.json")
         with open(class_names_path, "w") as f:
             json.dump(class_names, f)
+        # Metrik evaluasi (accuracy, precision, recall, f1) untuk ringkasan cepat
         metrics_path = os.path.join(MODELS_DIR, f"metrics_{model_id}.json")
         with open(metrics_path, "w") as f:
             json.dump(metrics_dict, f, indent=2)
 
+        # Konfigurasi training (epochs, batch_size, lr, dll) untuk ditampilkan di Info modal
         config_path = os.path.join(MODELS_DIR, f"config_{model_id}.json")
         with open(config_path, "w") as f:
             json.dump(cfg, f, indent=2)
 
+        # Confusion Matrix: visualisasi (PNG) + data mentah (JSON) untuk analisis
         cm_filename = f"confusion_matrix_{model_id}.png"
         cm_path = os.path.join(MODELS_DIR, cm_filename)
         _generate_confusion_matrix(model, val_gen, class_names, cm_path)
+        # Classification Report: precision, recall, f1 per kelas (JSON)
         report_filename = f"classification_report_{model_id}.json"
         report_path = os.path.join(MODELS_DIR, report_filename)
         _generate_classification_report(model, val_gen, class_names, report_path)
@@ -363,6 +410,9 @@ def _run_training(job_id, dataset_path, classes, cfg):
             config_path=config_path,
         )
         _log(job_id, "Training selesai!")
+        # KIRIM NOTIFIKASI KE LARAVEL VIA WEBHOOK
+        # Memberi tahu Laravel bahwa training selesai beserta hasil metriknya
+        # Laravel akan menyimpan data ke tabel training_jobs dan ai_models
         try:
             laravel_url = os.environ.get(
                 "LARAVEL_WEBHOOK_URL",
@@ -397,6 +447,8 @@ def _run_training(job_id, dataset_path, classes, cfg):
         _log(job_id, f"ERROR: {str(e)}")
 
 def _generate_confusion_matrix(model, val_gen, class_names, save_path):
+    # Buat Confusion Matrix (PNG + JSON)
+    # PNG untuk visualisasi di frontend, JSON untuk data mentah (kalkulasi dinamis)
     val_gen.reset()
     y_true = val_gen.classes
     y_pred = model.predict(val_gen, verbose=0)
@@ -413,6 +465,7 @@ def _generate_confusion_matrix(model, val_gen, class_names, save_path):
     plt.savefig(save_path)
     plt.close()
 
+    # Simpan juga versi JSON agar frontend bisa hitung akurasi, sensitivitas, dll
     cm_data_path = save_path.replace(".png", ".json")
     with open(cm_data_path, "w") as f:
         json.dump({
@@ -421,6 +474,8 @@ def _generate_confusion_matrix(model, val_gen, class_names, save_path):
         }, f, indent=2)
 
 def _generate_classification_report(model, val_gen, class_names, save_path):
+    # Classification report: precision, recall, f1-score per kelas
+    # output_dict=True mengembalikan dictionary (bukan string) untuk kemudahan parsing frontend
     val_gen.reset()
     y_true = val_gen.classes
     y_pred = model.predict(val_gen, verbose=0)
@@ -430,6 +485,8 @@ def _generate_classification_report(model, val_gen, class_names, save_path):
         json.dump(report, f, indent=2)
 
 def start_training(zip_path, epochs=10, validation_split=0.3, batch_size=32, image_size=224, learning_rate=0.0001, dataset_filename=None):
+    # Titik masuk training: dipanggil oleh endpoint FastAPI POST /training/start
+    # Membuat job_id unik, menyimpan konfigurasi, lalu menjalankan training di thread terpisah
     job_id = str(uuid.uuid4())
     dataset_dir = os.path.join(DATASETS_DIR, job_id)
     if not dataset_filename:
@@ -467,22 +524,25 @@ def start_training(zip_path, epochs=10, validation_split=0.3, batch_size=32, ima
             "learning_rate": learning_rate,
         },
     }
+    # Jalankan training di thread terpisah agar endpoint FastAPI tidak blocking
     thread = threading.Thread(target=_training_workflow, args=(job_id, zip_path, dataset_dir), daemon=True)
     thread.start()
     return job_id
 
 def _training_workflow(job_id, zip_path, dataset_dir):
+    # Workflow training lengkap: validasi ZIP -> ekstrak -> validasi dataset -> training
+    # Jika error terjadi di tahap mana pun, status job diubah menjadi "failed"
     try:
         _log(job_id, "Validating ZIP file...")
-        _validate_zip(zip_path)
+        _validate_zip(zip_path)  # Cek ukuran file dan keamanan path traversal
         _log(job_id, "Extracting dataset...")
         _update_job(job_id, status="extracting")
-        _extract_zip(zip_path, dataset_dir)
+        _extract_zip(zip_path, dataset_dir)  # Ekstrak ZIP ke folder dataset
         _log(job_id, f"Dataset extracted to {dataset_dir}")
-        classes, class_counts = _validate_dataset(job_id, dataset_dir)
+        classes, class_counts = _validate_dataset(job_id, dataset_dir)  # Validasi struktur folder
         _log(job_id, f"Validasi dataset berhasil: {classes}")
         cfg = jobs.get(job_id, {}).get("config", {})
-        _run_training(job_id, dataset_dir, classes, cfg)
+        _run_training(job_id, dataset_dir, classes, cfg)  # Mulai training
     except Exception as e:
         _update_job(job_id, status="failed", error_message=str(e))
         _log(job_id, f"FATAL ERROR: {str(e)}")

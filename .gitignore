@@ -33,6 +33,37 @@ test_model.keras
 test_cookies.txt
 fastapi_err.log
 
+# Root documentation & cheat sheets
+CHEAT_SHEET_UAS.md
+CHEAT_SHEET_UAS.pdf
+DASAR_PROYEK.md
+DASAR_PROYEK.html
+DASAR_PROYEK.jpeg
+DASAR_PROYEK.png
+DASAR_PROYEK.pdf
+catatanTerakhir.md
+TODO.md
+TODO1.md
+TODO_TRAINER_SESUAI_REFERENSI.md
+prompt_ai_agent_medical_classifier.md
+prompt_buat_ppt_dan_laporan.md
+prompt_buat_ppt_dan_laporan.pdf
+DOKUMENTASI_TRAINER.md
+DOKUMENTASI_TRAINER.pdf
+
+# PPT & presentation
+MediScan_AI.pptx
+generate-ppt.js
+package.json
+package-lock.json
+node_modules/
+
+# Design mockups (root only)
+/AgentAI*Landing*Page*Design*.jpeg
+/WordPress*Website*Design*Ecommerce*.jpeg
+/DASAR_PROYEK.jpeg
+/DASAR_PROYEK.png
+
 # IDE
 .idea/
 .vscode/
