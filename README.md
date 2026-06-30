@@ -91,35 +91,35 @@ flowchart TB
         A([Mulai]) --> B[Upload file ZIP dataset]
     end
 
-    subgraph Validasi["Validasi & Ekstraksi"]
-        B --> C{ZIP valid?\n≤ 500MB?\nTidak ada path traversal?}
+    subgraph Validasi["Validasi dan Ekstraksi"]
+        B --> C{"ZIP valid?\n≤ 500MB?\nTidak ada path traversal?"}
         C -->|Ya| D[Ekstraksi ke\nstorage/datasets/job_id]
         C -->|Tidak| E([Error])
-        D --> F{Dataset valid?\n≥ 3 kelas?\nFormat gambar .jpg/.png?\nFilter file mask?}
+        D --> F{"Dataset valid?\n≥ 3 kelas?\nFormat gambar .jpg/.png?\nFilter file mask?"}
         F -->|Ya| G[Dataset siap]
         F -->|Tidak| E
     end
 
-    subgraph Preprocess["Preprocessing & Augmentasi"]
+    subgraph Preprocess["Preprocessing dan Augmentasi"]
         G --> H[ImageDataGenerator\nvalidation_split=0.3]
-        H --> I[Train Generator:\npreprocess_input [-1,1]\n+ augmentasi:\nrotation 20°, shift 15%,\nshear 15%, zoom 15%,\nbrightness 0.8-1.2,\nhorizontal flip]
-        H --> J[Validation Generator:\npreprocess_input saja,\ntanpa augmentasi]
+        H --> I["Train Generator:\npreprocess_input [-1,1]\n+ augmentasi:\nrotation 20°, shift 15%,\nshear 15%, zoom 15%,\nbrightness 0.8-1.2,\nhorizontal flip"]
+        H --> J["Validation Generator:\npreprocess_input saja,\ntanpa augmentasi"]
     end
 
     subgraph Training["Pelatihan Dua Fase"]
-        I --> K[Phase 1: Frozen\nbase MobileNetV2 trainable=False\nclassifier: Dense 256→128→3\nAdam lr=1e-4, SparseFocalLoss]
+        I --> K["Phase 1: Frozen\nbase MobileNetV2 trainable=False\nclassifier: Dense 256 -> 128 -> 3\nAdam lr=1e-4, SparseFocalLoss"]
         J --> K
-        K --> L[Phase 2: Fine-Tune\nlayer 120+ trainable\nAdam lr=1e-5\nepoch lanjutan dari Phase 1]
+        K --> L["Phase 2: Fine-Tune\nlayer 120+ trainable\nAdam lr=1e-5\nepoch lanjutan dari Phase 1"]
     end
 
     subgraph Evaluasi["Evaluasi"]
-        L --> M[Hitung Accuracy, Precision,\nRecall, F1-Score]
-        M --> N[Generate Confusion Matrix\n& Classification Report]
+        L --> M["Hitung Accuracy, Precision,\nRecall, F1-Score"]
+        M --> N[Generate Confusion Matrix\ndan Classification Report]
     end
 
-    subgraph Output["Penyimpanan & Notifikasi"]
-        N --> O[Simpan artifak:\nmodel.keras, history.json,\nmetrics.json, class_names.json,\nCM.png, classification_report.json]
-        O --> P[Webhook POST ke Laravel\n→ simpan ke tabel\ntraining_jobs & ai_models]
+    subgraph Output["Penyimpanan dan Notifikasi"]
+        N --> O["Simpan artifak:\nmodel.keras, history.json,\nmetrics.json, class_names.json,\nCM.png, classification_report.json"]
+        O --> P["Webhook POST ke Laravel\n-> simpan ke tabel\ntraining_jobs dan ai_models"]
         P --> Q([Selesai])
     end
 ```
