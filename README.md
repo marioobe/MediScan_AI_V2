@@ -328,17 +328,37 @@ async def register_model(
 
 #### `ai-service/app/trainer.py` ([lihat file lengkap](ai-service/app/trainer.py))
 
-**Data Augmentation Menggunakan Layer Keras:**
+**Data Augmentation Menggunakan ImageDataGenerator:**
 
-Augmentasi ditempatkan sebagai lapisan pertama model agar berjalan di GPU selama forward pass:
+Augmentasi diterapkan melalui `ImageDataGenerator` dari Keras, yang memproses gambar secara real-time saat batch dimuat ke memori:
 
 ```python
-inputs = tf.keras.Input(shape=(image_size, image_size, 3))
-augmented = RandomFlip("horizontal_and_vertical")(inputs)
-augmented = RandomRotation(0.2)(augmented)
-augmented = RandomZoom(0.2)(augmented)
-base_model = MobileNetV2(weights="imagenet", include_top=False,
-                         pooling="avg", input_tensor=augmented)
+train_datagen = ImageDataGenerator(
+    preprocessing_function=preprocess_input,
+    rotation_range=20,
+    width_shift_range=0.15,
+    height_shift_range=0.15,
+    shear_range=0.15,
+    zoom_range=0.15,
+    brightness_range=(0.8, 1.2),
+    horizontal_flip=True,
+    fill_mode="nearest",
+    validation_split=val_split
+)
+val_datagen = ImageDataGenerator(
+    preprocessing_function=preprocess_input,
+    validation_split=val_split
+)
+train_gen = train_datagen.flow_from_directory(
+    dataset_path, target_size=img_size, batch_size=batch_size,
+    class_mode="sparse", classes=class_names,
+    subset="training", seed=RANDOM_SEED, shuffle=True
+)
+val_gen = val_datagen.flow_from_directory(
+    dataset_path, target_size=img_size, batch_size=batch_size,
+    class_mode="sparse", classes=class_names,
+    subset="validation", seed=RANDOM_SEED, shuffle=False
+)
 ```
 
 **Class Weights untuk Dataset Tidak Seimbang:**
@@ -384,38 +404,43 @@ class ProgressCallback(tf.keras.callbacks.Callback):
 
 **Fase Fine-Tuning dengan Learning Rate 1e-5:**
 
-Layer 0 sampai 120 dibekukan, sisanya dilatih ulang:
+Layer 0 sampai 119 dibekukan, layer 120+ diaktifkan:
 
 ```python
 base_model.trainable = True
 for layer in base_model.layers[:120]:
     layer.trainable = False
-model.compile(optimizer=Adam(learning_rate=1e-5),
-              loss="categorical_crossentropy",
-              metrics=["accuracy"])
+model.compile(
+    optimizer=Adam(learning_rate=lr * 0.1),  # 1e-5 (10x lebih kecil dari Fase 1)
+    loss=SparseFocalLoss(gamma=2.0, alpha=0.25),
+    metrics=["accuracy"]
+)
 ```
 
 **Training Dua Fase dengan Dynamic Epoch:**
 
+Fase 1 melatih seluruh `epochs`, fase 2 menambahkan `ft_epochs = max(epochs // 2, 5)`:
+
 ```python
-frozen_epochs = max(1, total_epochs // 2)
-fine_tune_epochs = total_epochs - frozen_epochs
-
-# Fase 1: Frozen Layers
-history_1 = model.fit(
-    train_gen, epochs=frozen_epochs, validation_data=val_gen,
-    class_weight=class_weight,
-    callbacks=[early_stop, reduce_lr, prog_cb_1], verbose=0
+# Fase 1: Frozen Layers — latih seluruh epochs
+history = model.fit(
+    train_gen, epochs=epochs, validation_data=val_gen,
+    class_weight=class_weight_dict,
+    callbacks=[prog_cb], verbose=0
 )
-epoch_1 = len(history_1.history["loss"])
+total_epochs_done = len(history.history["loss"])
 
-# Fase 2: Fine-Tuning (berurutan dari epoch_1)
-total_target = epoch_1 + fine_tune_epochs
-history_2 = model.fit(
-    train_gen, initial_epoch=epoch_1, epochs=total_target,
-    validation_data=val_gen, class_weight=class_weight,
-    callbacks=[early_stop, reduce_lr, prog_cb_2], verbose=0
+# Fase 2: Fine-Tuning — lanjut dari total_epochs_done
+ft_prog_cb = ProgressCallback(job_id, epoch_offset=total_epochs_done)
+history_ft = model.fit(
+    train_gen, epochs=ft_epochs, validation_data=val_gen,
+    class_weight=class_weight_dict,
+    callbacks=[ft_prog_cb], verbose=0
 )
+# Gabungkan history fase 2 ke history fase 1
+for k, v in history_ft.history.items():
+    history.history.setdefault(k, []).extend(v)
+total_epochs_done += len(history_ft.history["loss"])
 ```
 
 **Webhook Notifikasi ke Laravel (dengan error checking):**
@@ -473,13 +498,11 @@ def _generate_confusion_matrix(model, val_gen, class_names, save_path):
 
 ### 3.3 Penjelasan
 
-Proses pelatihan berjalan secara dinamis dalam dua fase berdasarkan total epoch yang dikonfigurasi pengguna.
+Proses pelatihan berjalan secara dinamis dalam dua fase. Fase 1 (Frozen Layers) melatih model untuk seluruh `epochs` yang dikonfigurasi. Seluruh layer dasar MobileNetV2 dibekukan sehingga hanya lapisan Dense dan Dropout di atasnya yang dilatih. Pendekatan ini memungkinkan model mempelajari pola spesifik dari gambar USG tanpa merusak representasi fitur umum dari ImageNet.
 
-Fase 1 (Frozen Layers) berjalan setengah dari total epoch. Seluruh layer dasar MobileNetV2 dibekukan sehingga hanya lapisan Dense dan Dropout di atasnya yang dilatih. Pendekatan ini memungkinkan model mempelajari pola spesifik dari gambar USG tanpa merusak representasi fitur umum dari ImageNet.
+Fase 2 (Fine-Tuning) menambahkan `ft_epochs = max(epochs // 2, 5)` epoch tambahan. Layer ke-0 hingga ke-119 tetap dibekukan, sementara layer 120 ke atas ikut dilatih dengan learning rate 1e-5 (10x lebih kecil dari fase 1). Pendekatan ini mencegah perubahan drastis pada bobot yang sudah matang (catastrophic forgetting).
 
-Fase 2 (Fine-Tuning) melanjutkan sisa epoch dengan base model yang diaktifkan sebagian. Layer ke-0 hingga ke-120 tetap dibekukan, sementara layer 120 ke atas ikut dilatih dengan learning rate kecil (1e-5). Pendekatan ini mencegah perubahan drastis pada bobot yang sudah matang.
-
-Penggunaan parameter `initial_epoch` pada pemanggilan `model.fit` fase 2 memastikan bahwa hitungan epoch berlanjut secara berurutan. Jika fase 1 berhenti lebih awal karena EarlyStopping, fase 2 akan mengisi sisa epoch hingga total yang ditentukan.
+History kedua fase digabungkan sehingga evaluasi akhir mencakup seluruh epoch dari kedua fase. Tidak ada EarlyStopping atau ReduceLROnPlateau yang digunakan, sesuai referensi untuk menjaga konsistensi eksperimen.
 
 **Grad-CAM (Gradient-weighted Class Activation Mapping):** Setiap kali pengguna melakukan prediksi melalui endpoint `/predict`, sistem secara otomatis menghasilkan visualisasi Grad-CAM. Heatmap dihasilkan dari gradient yang mengalir ke layer konvolusi terakhir (`out_relu`) arsitektur MobileNetV2. Gradient tersebut di-pooling secara global untuk mendapatkan bobot setiap fitur, kemudian dikalikan dengan aktivasi konvolusi untuk menghasilkan peta panas. Peta ini di-resize sesuai ukuran asli gambar, di-overlay dengan opacity 60% gambar asli dan 40% heatmap menggunakan OpenCV, lalu disimpan di `storage/predictions/`. URL gambar Grad-CAM disertakan dalam respons prediksi dan ditampilkan di halaman publik maupun admin panel.
 
@@ -511,7 +534,7 @@ Selain metrik kuantitatif, sistem juga menyediakan visualisasi **Grad-CAM** pada
 
 ### 4.1 Kesimpulan
 
-Integrasi data augmentation menggunakan layer Keras bawaan (RandomFlip, RandomRotation, RandomZoom) dan penerapan class weights berhasil membuat model belajar secara objektif tanpa mengalami overfitting. Arsitektur MobileNetV2 dengan fine-tuning dua fase mampu mencapai akurasi validasi final sebesar 81.11% dengan loss 0.4499. Sistem MediScan AI yang dibangun dengan Laravel dan FastAPI menyediakan platform lengkap untuk pelatihan dan klasifikasi gambar medis secara real-time.
+Integrasi data augmentation menggunakan ImageDataGenerator (rotation, shift, shear, zoom, brightness, flip) dan penerapan class weights berhasil membuat model belajar secara objektif tanpa mengalami overfitting. Arsitektur MobileNetV2 dengan fine-tuning dua fase mampu mencapai akurasi validasi final sebesar 81.11% dengan loss 0.4499. Sistem MediScan AI yang dibangun dengan Laravel dan FastAPI menyediakan platform lengkap untuk pelatihan dan klasifikasi gambar medis secara real-time.
 
 ---
 
